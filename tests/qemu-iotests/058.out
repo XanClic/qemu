@@ -18,4 +18,14 @@ no file open, try 'help open'
 Catalog size is too small for this disk size
 qemu-io: can't open device TEST_DIR/t.bochs
 no file open, try 'help open'
+
+== Negative extent size ==
+Extent size 4294967295 is too large
+qemu-io: can't open device TEST_DIR/t.bochs
+no file open, try 'help open'
+
+== Zero extent size ==
+Extent size may not be zero
+qemu-io: can't open device TEST_DIR/t.bochs
+no file open, try 'help open'
 *** done
