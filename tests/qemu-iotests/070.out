@@ -3,4 +3,19 @@ QA output created by 070
 == check that the first sector can be read ==
 read 512/512 bytes at offset 0
 512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+
+== block_size must be a multiple of 512 ==
+block_size 513 must be a multiple of 512
+qemu-io: can't open device TEST_DIR/t.cloop
+no file open, try 'help open'
+
+== block_size cannot be zero ==
+block_size cannot be zero
+qemu-io: can't open device TEST_DIR/t.cloop
+no file open, try 'help open'
+
+== huge block_size ===
+block_size 4294966784 must be 64 MB or less
+qemu-io: can't open device TEST_DIR/t.cloop
+no file open, try 'help open'
 *** done
