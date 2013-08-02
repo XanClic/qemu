@@ -28,4 +28,14 @@ no file open, try 'help open'
 image requires too many offsets, try increasing block size
 qemu-io: can't open device TEST_DIR/t.cloop
 no file open, try 'help open'
+
+== refuse images with non-monotonically increasing offsets ==
+offsets not monotonically increasing at index 1, image file is corrupt
+qemu-io: can't open device TEST_DIR/t.cloop
+no file open, try 'help open'
+
+== refuse images with invalid compressed block size ==
+invalid compressed block size at index 1, image file is corrupt
+qemu-io: can't open device TEST_DIR/t.cloop
+no file open, try 'help open'
 *** done
