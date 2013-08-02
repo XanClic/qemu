@@ -23,4 +23,9 @@ no file open, try 'help open'
 n_blocks 4294967295 must be 536870911 or less
 qemu-io: can't open device TEST_DIR/t.cloop
 no file open, try 'help open'
+
+== refuse images that require too many offsets ===
+image requires too many offsets, try increasing block size
+qemu-io: can't open device TEST_DIR/t.cloop
+no file open, try 'help open'
 *** done
