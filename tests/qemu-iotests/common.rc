@@ -181,12 +181,29 @@ _check_test_img()
 
 _img_info()
 {
+    discard=0
     $QEMU_IMG info "$@" $TEST_IMG 2>&1 | \
         sed -e "s#$IMGPROTO:$TEST_DIR#TEST_DIR#g" \
             -e "s#$TEST_DIR#TEST_DIR#g" \
             -e "s#$IMGFMT#IMGFMT#g" \
             -e "/^disk size:/ D" \
-            -e "/actual-size/ D"
+            -e "/actual-size/ D" | \
+        while IFS='' read line; do
+            if [ "$line" == "Format specific information:" ]; then
+                discard=1
+            elif [ "`echo "$line" | sed -e 's/^ *//'`" == '"format-specific": {' ]; then
+                discard=2
+                json_indent="`echo "$line" | sed -e 's/^\( *\).*$/\1/'`"
+            fi
+            if [ $discard == 0 ]; then
+                echo "$line"
+            elif [ $discard == 1 -a -z "$line" ]; then
+                echo
+                discard=0
+            elif [ $discard == 2 -a "`echo "$line" | sed -e 's/ *$//'`" == "${json_indent}}," ]; then
+                discard=0
+            fi
+        done
 }
 
 _get_pids_by_name()
