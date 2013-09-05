@@ -1,0 +1,22 @@
+QA output created by 064
+
+=== Testing qcow2 image with -o compat=0.10 ===
+
+Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+Format specific information:
+compat: 0.10
+
+=== Testing qcow2 image with -o compat=1.1,lazy_refcounts=off ===
+
+Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+Format specific information:
+compat: 1.1
+lazy refcounts: false
+
+=== Testing qcow2 image with -o compat=1.1,lazy_refcounts=on ===
+
+Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+Format specific information:
+compat: 1.1
+lazy refcounts: true
+*** done

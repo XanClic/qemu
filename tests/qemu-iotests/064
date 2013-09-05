@@ -1,0 +1,72 @@
+#!/bin/bash
+#
+# Test for additional information emitted by qemu-img info on qcow2
+# images
+#
+# Copyright (C) 2013 Red Hat, Inc.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# creator
+owner=mreitz@redhat.com
+
+seq=`basename $0`
+echo "QA output created by $seq"
+
+here=`pwd`
+tmp=/tmp/$$
+status=1	# failure is the default!
+
+_cleanup()
+{
+	_cleanup_test_img
+}
+trap "_cleanup; exit \$status" 0 1 2 3 15
+
+# get standard environment, filters and checks
+. ./common.rc
+. ./common.filter
+
+# This tests qocw2-specific low-level functionality
+_supported_fmt qcow2
+_supported_proto generic
+_supported_os Linux
+
+IMG_SIZE=64M
+
+echo
+echo "=== Testing qcow2 image with -o compat=0.10 ==="
+echo
+IMGOPTS="compat=0.10" _make_test_img $IMG_SIZE
+# don't use _img_info, since that function will filter out the
+# additional information we're about to test for
+$QEMU_IMG info "$TEST_IMG" | grep "Format specific information:" -A 42
+
+echo
+echo "=== Testing qcow2 image with -o compat=1.1,lazy_refcounts=off ==="
+echo
+IMGOPTS="compat=1.1,lazy_refcounts=off" _make_test_img $IMG_SIZE
+$QEMU_IMG info "$TEST_IMG" | grep "Format specific information:" -A 42
+
+echo
+echo "=== Testing qcow2 image with -o compat=1.1,lazy_refcounts=on ==="
+echo
+IMGOPTS="compat=1.1,lazy_refcounts=on" _make_test_img $IMG_SIZE
+$QEMU_IMG info "$TEST_IMG" | grep "Format specific information:" -A 42
+
+# success, all done
+echo "*** done"
+rm -f $seq.full
+status=0
