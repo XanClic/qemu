@@ -1755,8 +1755,20 @@ static int64_t qcow2_vm_state_offset(BDRVQcowState *s)
 static int qcow2_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
 {
     BDRVQcowState *s = bs->opaque;
+
     bdi->cluster_size = s->cluster_size;
     bdi->vm_state_offset = qcow2_vm_state_offset(s);
+
+    bdi->format_specific = g_new0(ImageInfoSpecific, 1);
+    bdi->format_specific->kind = IMAGE_INFO_SPECIFIC_KIND_QCOW2;
+    bdi->format_specific->qcow2 = g_new0(ImageInfoSpecificQCow2, 1);
+    if (s->qcow_version == 2) {
+        bdi->format_specific->qcow2->compat = g_strdup("0.10");
+    } else if (s->qcow_version == 3) {
+        bdi->format_specific->qcow2->compat = g_strdup("1.1");
+        bdi->format_specific->qcow2->lazy_refcounts = s->use_lazy_refcounts;
+        bdi->format_specific->qcow2->has_lazy_refcounts = true;
+    }
     return 0;
 }
 
