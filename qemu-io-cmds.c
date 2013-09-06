@@ -10,6 +10,7 @@
 
 #include "qemu-io.h"
 #include "block/block_int.h"
+#include "block/qapi.h"
 #include "qemu/main-loop.h"
 
 #define CMD_NOFILE_OK   0x01
@@ -1698,6 +1699,11 @@ static int info_f(BlockDriverState *bs, int argc, char **argv)
 
     printf("cluster size: %s\n", s1);
     printf("vm state offset: %s\n", s2);
+
+    if (bdi.format_specific) {
+        printf("Format specific information:\n");
+        bdrv_image_info_specific_dump(fprintf, stdout, bdi.format_specific);
+    }
 
     bdrv_put_info(bs, &bdi);
 
