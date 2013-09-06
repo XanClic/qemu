@@ -1699,6 +1699,8 @@ static int info_f(BlockDriverState *bs, int argc, char **argv)
     printf("cluster size: %s\n", s1);
     printf("vm state offset: %s\n", s2);
 
+    bdrv_put_info(bs, &bdi);
+
     return 0;
 }
 

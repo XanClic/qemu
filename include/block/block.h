@@ -18,6 +18,8 @@ typedef struct BlockDriverInfo {
     /* offset at which the VM state can be saved (0 if not possible) */
     int64_t vm_state_offset;
     bool is_dirty;
+    /* additional information; NULL if none */
+    ImageInfoSpecific *format_specific;
 } BlockDriverInfo;
 
 typedef struct BlockFragInfo {
@@ -312,6 +314,7 @@ int bdrv_get_flags(BlockDriverState *bs);
 int bdrv_write_compressed(BlockDriverState *bs, int64_t sector_num,
                           const uint8_t *buf, int nb_sectors);
 int bdrv_get_info(BlockDriverState *bs, BlockDriverInfo *bdi);
+void bdrv_put_info(BlockDriverState *bs, BlockDriverInfo *bdi);
 void bdrv_round_to_clusters(BlockDriverState *bs,
                             int64_t sector_num, int nb_sectors,
                             int64_t *cluster_sector_num,

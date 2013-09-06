@@ -1922,8 +1922,10 @@ void bdrv_round_to_clusters(BlockDriverState *bs,
                             int *cluster_nb_sectors)
 {
     BlockDriverInfo bdi;
+    int ret;
 
-    if (bdrv_get_info(bs, &bdi) < 0 || bdi.cluster_size == 0) {
+    ret = bdrv_get_info(bs, &bdi);
+    if (ret < 0 || bdi.cluster_size == 0) {
         *cluster_sector_num = sector_num;
         *cluster_nb_sectors = nb_sectors;
     } else {
@@ -1931,6 +1933,9 @@ void bdrv_round_to_clusters(BlockDriverState *bs,
         *cluster_sector_num = QEMU_ALIGN_DOWN(sector_num, c);
         *cluster_nb_sectors = QEMU_ALIGN_UP(sector_num - *cluster_sector_num +
                                             nb_sectors, c);
+    }
+    if (ret >= 0) {
+        bdrv_put_info(bs, &bdi);
     }
 }
 
@@ -3227,6 +3232,15 @@ int bdrv_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
         return -ENOTSUP;
     memset(bdi, 0, sizeof(*bdi));
     return drv->bdrv_get_info(bs, bdi);
+}
+
+/**
+ * Releases all data which has been allocated through bdrv_get_info. This
+ * function should be called if and only if bdrv_get_info was successful.
+ */
+void bdrv_put_info(BlockDriverState *bs, BlockDriverInfo *bdi)
+{
+    qapi_free_ImageInfoSpecific(bdi->format_specific);
 }
 
 int bdrv_save_vmstate(BlockDriverState *bs, const uint8_t *buf,

@@ -1370,6 +1370,7 @@ static int img_convert(int argc, char **argv)
             goto out;
         }
         cluster_size = bdi.cluster_size;
+        bdrv_put_info(out_bs, &bdi);
         if (cluster_size <= 0 || cluster_size > IO_BUF_SIZE) {
             error_report("invalid cluster size");
             ret = -1;

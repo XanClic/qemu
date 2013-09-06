@@ -133,6 +133,10 @@ void bdrv_query_image_info(BlockDriverState *bs,
         }
         info->dirty_flag = bdi.is_dirty;
         info->has_dirty_flag = true;
+        if (bdi.format_specific) {
+            info->format_specific = bdi.format_specific;
+            info->has_format_specific = true;
+        }
     }
     backing_filename = bs->backing_file;
     if (backing_filename[0] != '\0') {

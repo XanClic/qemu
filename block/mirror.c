@@ -320,10 +320,12 @@ static void coroutine_fn mirror_run(void *opaque)
     bdrv_get_backing_filename(s->target, backing_filename,
                               sizeof(backing_filename));
     if (backing_filename[0] && !s->target->backing_hd) {
-        bdrv_get_info(s->target, &bdi);
-        if (s->granularity < bdi.cluster_size) {
-            s->buf_size = MAX(s->buf_size, bdi.cluster_size);
-            s->cow_bitmap = bitmap_new(length);
+        if (bdrv_get_info(s->target, &bdi) >= 0) {
+            if (s->granularity < bdi.cluster_size) {
+                s->buf_size = MAX(s->buf_size, bdi.cluster_size);
+                s->cow_bitmap = bitmap_new(length);
+            }
+            bdrv_put_info(s->target, &bdi);
         }
     }
 
@@ -545,11 +547,15 @@ void mirror_start(BlockDriverState *bs, BlockDriverState *target,
         /* Choose the default granularity based on the target file's cluster
          * size, clamped between 4k and 64k.  */
         BlockDriverInfo bdi;
-        if (bdrv_get_info(target, &bdi) >= 0 && bdi.cluster_size != 0) {
+        int ret = bdrv_get_info(target, &bdi);
+        if (ret >= 0 && bdi.cluster_size != 0) {
             granularity = MAX(4096, bdi.cluster_size);
             granularity = MIN(65536, granularity);
         } else {
             granularity = 65536;
+        }
+        if (ret >= 0) {
+            bdrv_put_info(target, &bdi);
         }
     }
 
