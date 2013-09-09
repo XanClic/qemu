@@ -23,28 +23,8 @@ struct Error
     ErrorClass err_class;
 };
 
-void error_set(Error **errp, ErrorClass err_class, const char *fmt, ...)
-{
-    Error *err;
-    va_list ap;
-
-    if (errp == NULL) {
-        return;
-    }
-    assert(*errp == NULL);
-
-    err = g_malloc0(sizeof(*err));
-
-    va_start(ap, fmt);
-    err->msg = g_strdup_vprintf(fmt, ap);
-    va_end(ap);
-    err->err_class = err_class;
-
-    *errp = err;
-}
-
-void error_set_errno(Error **errp, int os_errno, ErrorClass err_class,
-                     const char *fmt, ...)
+void error_set_bt(const char *file, const char *func, int line,
+                  Error **errp, ErrorClass err_class, const char *fmt, ...)
 {
     Error *err;
     char *msg1;
@@ -59,21 +39,63 @@ void error_set_errno(Error **errp, int os_errno, ErrorClass err_class,
 
     va_start(ap, fmt);
     msg1 = g_strdup_vprintf(fmt, ap);
-    if (os_errno != 0) {
-        err->msg = g_strdup_printf("%s: %s", msg1, strerror(os_errno));
-        g_free(msg1);
-    } else {
-        err->msg = msg1;
-    }
+#ifdef CONFIG_ERROR_BACKTRACE
+    err->msg = g_strdup_printf("%s:%i (in %s): %s", file, line, func, msg1);
+    g_free(msg1);
+#else
+    err->msg = msg1;
+#endif
     va_end(ap);
     err->err_class = err_class;
 
     *errp = err;
 }
 
-void error_setg_file_open(Error **errp, int os_errno, const char *filename)
+void error_set_errno_bt(const char *file, const char *func, int line,
+                        Error **errp, int os_errno, ErrorClass err_class,
+                        const char *fmt, ...)
 {
-    error_setg_errno(errp, os_errno, "Could not open '%s'", filename);
+    Error *err;
+    char *msg1;
+    va_list ap;
+
+    if (errp == NULL) {
+        return;
+    }
+    assert(*errp == NULL);
+
+    err = g_malloc0(sizeof(*err));
+
+    va_start(ap, fmt);
+    msg1 = g_strdup_vprintf(fmt, ap);
+#ifdef CONFIG_ERROR_BACKTRACE
+    if (os_errno != 0) {
+        err->msg = g_strdup_printf("%s:%i (in %s): %s: %s", file, line, func,
+                                   msg1, strerror(os_errno));
+    } else {
+        err->msg = g_strdup_printf("%s:%i (in %s): %s", file, line, func, msg1);
+    }
+    g_free(msg1);
+#else
+    if (os_errno != 0) {
+        err->msg = g_strdup_printf("%s: %s", msg1, strerror(os_errno));
+        g_free(msg1);
+    } else {
+        err->msg = msg1;
+    }
+#endif
+    va_end(ap);
+    err->err_class = err_class;
+
+    *errp = err;
+}
+
+void error_setg_file_open_bt(const char *file, const char *func, int line,
+                             Error **errp, int os_errno, const char *filename)
+{
+    error_set_errno_bt(file, func, line, errp, os_errno,
+                       ERROR_CLASS_GENERIC_ERROR, "Could not open '%s'",
+                       filename);
 }
 
 Error *error_copy(const Error *err)
@@ -110,11 +132,26 @@ void error_free(Error *err)
     }
 }
 
-void error_propagate(Error **dst_err, Error *local_err)
+
+void error_propagate_bt(const char *file, const char *func, int line,
+                        Error **dst_err, Error *local_err)
 {
-    if (dst_err && !*dst_err) {
-        *dst_err = local_err;
-    } else if (local_err) {
+    if (local_err) {
+#ifdef CONFIG_ERROR_BACKTRACE
+        if (dst_err && !*dst_err) {
+            Error *err = g_malloc0(sizeof(*err));
+            err->msg = g_strdup_printf("%s\n    from %s:%i (in %s)",
+                                       local_err->msg, file, line, func);
+            err->err_class = local_err->err_class;
+            *dst_err = err;
+        }
         error_free(local_err);
+#else
+        if (dst_err && !*dst_err) {
+            *dst_err = local_err;
+        } else {
+            error_free(local_err);
+        }
+#endif
     }
 }

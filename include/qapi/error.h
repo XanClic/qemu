@@ -25,16 +25,28 @@ typedef struct Error Error;
 /**
  * Set an indirect pointer to an error given a ErrorClass value and a
  * printf-style human message.  This function is not meant to be used outside
- * of QEMU.
+ * of QEMU.  The message will be prepended by the file/function/line information
+ * if CONFIG_ERROR_BACKTRACE is defined.
  */
-void error_set(Error **err, ErrorClass err_class, const char *fmt, ...) GCC_FMT_ATTR(3, 4);
+void error_set_bt(const char *file, const char *func, int line,
+                  Error **err, ErrorClass err_class, const char *fmt, ...)
+        GCC_FMT_ATTR(6, 7);
+
+#define error_set(...) \
+    error_set_bt(__FILE__, __func__, __LINE__, __VA_ARGS__)
 
 /**
  * Set an indirect pointer to an error given a ErrorClass value and a
  * printf-style human message, followed by a strerror() string if
- * @os_error is not zero.
+ * @os_error is not zero.  The message will be prepended by the
+ * file/function/line information if CONFIG_ERROR_BACKTRACE is defined.
  */
-void error_set_errno(Error **err, int os_error, ErrorClass err_class, const char *fmt, ...) GCC_FMT_ATTR(4, 5);
+void error_set_errno_bt(const char *file, const char *func, int line,
+                        Error **err, int os_error, ErrorClass err_class,
+                        const char *fmt, ...) GCC_FMT_ATTR(7, 8);
+
+#define error_set_errno(...) \
+    error_set_errno_bt(__FILE__, __func__, __LINE__, __VA_ARGS__)
 
 /**
  * Same as error_set(), but sets a generic error
@@ -47,7 +59,11 @@ void error_set_errno(Error **err, int os_error, ErrorClass err_class, const char
 /**
  * Helper for open() errors
  */
-void error_setg_file_open(Error **errp, int os_errno, const char *filename);
+void error_setg_file_open_bt(const char *file, const char *func, int line,
+                             Error **errp, int os_errno, const char *filename);
+
+#define error_setg_file_open(...) \
+    error_setg_file_open_bt(__FILE__, __func__, __LINE__, __VA_ARGS__)
 
 /**
  * Returns true if an indirect pointer to an error is pointing to a valid
@@ -71,11 +87,17 @@ Error *error_copy(const Error *err);
 const char *error_get_pretty(Error *err);
 
 /**
- * Propagate an error to an indirect pointer to an error.  This function will
- * always transfer ownership of the error reference and handles the case where
- * dst_err is NULL correctly.  Errors after the first are discarded.
+ * Propagate an error to an indirect pointer to an error, appending the given
+ * file/function/line information to the message (as a backtrace) if
+ * CONFIG_ERROR_BACKTRACE is defined.  This function will always transfer
+ * ownership of the error reference and handles the case where dst_err is NULL
+ * correctly.  Errors after the first are discarded.
  */
-void error_propagate(Error **dst_err, Error *local_err);
+void error_propagate_bt(const char *file, const char *func, int line,
+                       Error **dest_err, Error *local_err);
+
+#define error_propagate(...) \
+    error_propagate_bt(__FILE__, __func__, __LINE__, __VA_ARGS__)
 
 /**
  * Free an error object.

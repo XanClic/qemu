@@ -243,6 +243,7 @@ gtk=""
 gtkabi="2.0"
 tpm="no"
 libssh2=""
+error_backtrace="no"
 
 # parse CC options first
 for opt do
@@ -949,6 +950,10 @@ for opt do
   ;;
   --enable-libssh2) libssh2="yes"
   ;;
+  --enable-error-bt) error_backtrace="yes"
+  ;;
+  --disable-error-bt) error_backtrace="no"
+  ;;
   *) echo "ERROR: unknown option $opt"; show_help="yes"
   ;;
   esac
@@ -1168,6 +1173,8 @@ echo "  --gcov=GCOV              use specified gcov [$gcov_tool]"
 echo "  --enable-tpm             enable TPM support"
 echo "  --disable-libssh2        disable ssh block device support"
 echo "  --enable-libssh2         enable ssh block device support"
+echo "  --disable-error-bt       disable backtraces on internal errors"
+echo "  --enable-error-bt        enable backtraces on internal errors"
 echo ""
 echo "NOTE: The object files are built at the place where configure is launched"
 exit 1
@@ -3650,6 +3657,7 @@ echo "gcov              $gcov_tool"
 echo "gcov enabled      $gcov"
 echo "TPM support       $tpm"
 echo "libssh2 support   $libssh2"
+echo "error backtraces  $error_backtrace"
 echo "TPM passthrough   $tpm_passthrough"
 echo "QOM debugging     $qom_cast_debug"
 
@@ -4042,6 +4050,10 @@ fi
 
 if test "$libssh2" = "yes" ; then
   echo "CONFIG_LIBSSH2=y" >> $config_host_mak
+fi
+
+if test "$error_backtrace" = "yes" ; then
+  echo "CONFIG_ERROR_BACKTRACE=y" >> $config_host_mak
 fi
 
 if test "$virtio_blk_data_plane" = "yes" ; then
