@@ -470,6 +470,7 @@ int qcow2_snapshot_goto(BlockDriverState *bs, const char *snapshot_id)
 
     cur_l1_bytes = s->l1_size * sizeof(uint64_t);
     sn_l1_bytes = sn->l1_size * sizeof(uint64_t);
+//fprintf(stderr, "goto: cur %x; sn %x\n", cur_l1_bytes, sn_l1_bytes);
 
     /*
      * Copy the snapshot L1 table to the current L1 table.
@@ -667,6 +668,7 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs, const char *snapshot_name)
     sn = &s->snapshots[snapshot_index];
 
     /* Allocate and read in the snapshot's L1 table */
+    /* XXX Should be sn->l1_size ?!?!? */
     new_l1_bytes = s->l1_size * sizeof(uint64_t);
     new_l1_table = g_malloc0(align_offset(new_l1_bytes, 512));
 
