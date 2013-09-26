@@ -637,13 +637,13 @@ int qcow2_update_cluster_refcount(BlockDriverState *bs,
 static int64_t alloc_clusters_noref(BlockDriverState *bs, uint64_t size)
 {
     BDRVQcowState *s = bs->opaque;
-    uint64_t i, nb_clusters;
+    uint64_t i, nb_clusters, free_cluster = s->free_cluster_index;
     int refcount;
 
     nb_clusters = size_to_clusters(s, size);
 retry:
     for(i = 0; i < nb_clusters; i++) {
-        uint64_t next_cluster_index = s->free_cluster_index++;
+        uint64_t next_cluster_index = free_cluster++;
         refcount = get_refcount(bs, next_cluster_index);
 
         if (refcount < 0) {
@@ -655,9 +655,12 @@ retry:
 #ifdef DEBUG_ALLOC2
     fprintf(stderr, "alloc_clusters: size=%" PRId64 " -> %" PRId64 "\n",
             size,
-            (s->free_cluster_index - nb_clusters) << s->cluster_bits);
+            (free_cluster - nb_clusters) << s->cluster_bits);
 #endif
-    return (s->free_cluster_index - nb_clusters) << s->cluster_bits;
+    if (free_cluster == s->free_cluster_index + nb_clusters) {
+        s->free_cluster_index = free_cluster;
+    }
+    return (free_cluster - nb_clusters) << s->cluster_bits;
 }
 
 int64_t qcow2_alloc_clusters(BlockDriverState *bs, uint64_t size)
