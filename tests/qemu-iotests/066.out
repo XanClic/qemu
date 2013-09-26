@@ -1,0 +1,16 @@
+QA output created by 066
+
+=== Comparing clean image to fragmented one ===
+
+Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864 
+wrote 67108864/67108864 bytes at offset 0
+64 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+discard 33554432/33554432 bytes at offset 33554432
+32 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+discard 32505856/32505856 bytes at offset 0
+31 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+wrote 33554432/33554432 bytes at offset 33554432
+32 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+wrote 67108864/67108864 bytes at offset 0
+64 MiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+*** Image sizes equal; test done
