@@ -161,6 +161,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
 {
     BDRVQcowState *s = bs->opaque;
     unsigned int refcount_table_index;
+    bool refblock_leaked = false;
     int ret;
 
     BLKDBG_EVENT(bs->file, BLKDBG_REFBLOCK_ALLOC);
@@ -245,6 +246,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
         if (ret < 0) {
             goto fail_block;
         }
+        refblock_leaked = true;
 
         ret = qcow2_cache_flush(bs, s->refcount_block_cache);
         if (ret < 0) {
@@ -282,6 +284,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
         }
 
         s->refcount_table[refcount_table_index] = new_block;
+        refblock_leaked = false;
 
         /* The new refcount block may be where the caller intended to put its
          * data, so let it restart the search. */
@@ -397,6 +400,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
     if (ret < 0) {
         goto fail_table;
     }
+    refblock_leaked = false;
 
     /* And switch it in memory */
     uint64_t old_table_offset = s->refcount_table_offset;
@@ -426,6 +430,14 @@ fail_table:
 fail_block:
     if (*refcount_block != NULL) {
         qcow2_cache_put(bs, s->refcount_block_cache, (void**) refcount_block);
+    }
+    if (refblock_leaked) {
+        int wret;
+        wret = update_refcount(bs, new_block, s->cluster_size, -1,
+                               QCOW2_DISCARD_ALWAYS);
+        if ((ret == 0) && (wret < 0)) {
+            ret = wret;
+        }
     }
     return ret;
 }
