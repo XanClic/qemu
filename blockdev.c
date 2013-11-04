@@ -2038,8 +2038,8 @@ void qmp_drive_mirror(const char *device, const char *target,
         case NEW_IMAGE_MODE_ABSOLUTE_PATHS:
             /* create new image with backing file */
             bdrv_img_create(target, format,
-                            source->filename,
-                            source->drv->format_name,
+                            source ? source->filename : NULL,
+                            source ? source->drv->format_name : NULL,
                             NULL, size, flags, &local_err, false);
             break;
         default:
