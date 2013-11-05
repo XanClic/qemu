@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# Test mirroring block device without backing file in absolute-paths mode
+#
+# Copyright (C) 2013 Red Hat, Inc.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# creator
+owner=mreitz@redhat.com
+
+seq="$(basename $0)"
+echo "QA output created by $seq"
+
+here="$PWD"
+tmp=/tmp/$$
+status=1	# failure is the default!
+
+_cleanup()
+{
+	_cleanup_test_img
+}
+trap "_cleanup; exit \$status" 0 1 2 3 15
+
+# get standard environment, filters and checks
+. ./common.rc
+. ./common.filter
+
+_supported_fmt qed qcow2 qcow2 vmdk
+_supported_proto file
+_supported_os Linux
+
+function do_run_qemu()
+{
+    echo Testing: "$@" | _filter_imgfmt
+    $QEMU -nographic -qmp stdio -serial none "$@"
+    echo
+}
+
+function run_qemu()
+{
+    # Filter out empty returns and the SHUTDOWN event, because these may occur
+    # interleaved with the block job events (in a non-deterministic manner).
+    # Also, filter out the "Formatting" message which is emitted when the target
+    # image is created - it contains format-specific information.
+    do_run_qemu "$@" 2>&1 | _filter_testdir | _filter_qmp |\
+        grep -v '{"return": {}}' | grep -v '"event": "SHUTDOWN"' |\
+        grep -v '^Formatting'
+}
+
+size=128K
+
+_make_test_img $size
+
+for sync in full top none
+do
+
+echo
+echo "=== Mirroring non-backed image in absolute-paths mode with sync=$sync ==="
+echo
+
+run_qemu -drive file="$TEST_IMG",format="$IMGFMT",if=none,id=disk \
+         -device virtio-blk-pci,drive=disk,id=virtio0 <<EOF
+{ "execute": "qmp_capabilities" }
+{ "execute": "drive-mirror",
+    "arguments": { "device": "disk", "target": "$TEST_IMG.target",
+                   "format": "$IMGFMT", "mode": "absolute-paths",
+                   "sync": "$sync" } }
+{ "execute": "quit" }
+EOF
+
+rm -f $TEST_IMG.target
+
+done
+
+# success, all done
+echo "*** done"
+rm -f $seq.full
+status=0
