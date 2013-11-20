@@ -356,3 +356,114 @@ int qemu_read_config_file(const char *filename)
         return -EINVAL;
     }
 }
+
+static void config_parse_qdict_section(QDict *options, QemuOptsList *opts,
+                                       Error **errp)
+{
+    QemuOpts *subopts, *subopts_i;
+    QDict *subqdict, *subqdict_i = NULL;
+    char *prefix = g_strdup_printf("%s.", opts->name);
+    Error *local_err = NULL;
+    size_t orig_size, enum_size;
+
+    qdict_extract_subqdict(options, &subqdict, prefix);
+    orig_size = qdict_size(subqdict);
+    if (!orig_size) {
+        goto out;
+    }
+
+    subopts = qemu_opts_create_nofail(opts);
+    qemu_opts_absorb_qdict(subopts, subqdict, &local_err);
+    if (error_is_set(&local_err)) {
+        error_propagate(errp, local_err);
+        goto out;
+    }
+
+    enum_size = qdict_size(subqdict);
+    if (enum_size < orig_size && enum_size) {
+        error_setg(errp, "Unknown option '%s' for '%s'",
+                   qdict_first(subqdict)->key, opts->name);
+        goto out;
+    }
+
+    if (enum_size) {
+        /* Multiple, enumerated rules */
+        int i;
+
+        /* Not required anymore */
+        qemu_opts_del(subopts);
+
+        for (i = 0; i < INT_MAX; i++) {
+            char i_prefix[32], opt_name[48];
+            size_t snprintf_ret;
+
+            snprintf_ret = snprintf(i_prefix, 32, "%i.", i);
+            assert(snprintf_ret < 32);
+
+            snprintf_ret = snprintf(opt_name, 48, "%s.%i", opts->name, i);
+            assert(snprintf_ret < 48);
+
+            qdict_extract_subqdict(subqdict, &subqdict_i, i_prefix);
+            if (!qdict_size(subqdict_i)) {
+                break;
+            }
+
+            subopts_i = qemu_opts_create(opts, opt_name, 1, NULL);
+            if (!subopts_i) {
+                error_setg(errp, "Option ID '%s' already in use", opt_name);
+                goto out;
+            }
+
+            qemu_opts_absorb_qdict(subopts_i, subqdict_i, &local_err);
+            if (error_is_set(&local_err)) {
+                error_propagate(errp, local_err);
+                qemu_opts_del(subopts_i);
+                goto out;
+            }
+
+            if (qdict_size(subqdict_i)) {
+                error_setg(errp, "[%s] rules don't support the option '%s'",
+                           opts->name, qdict_first(subqdict_i)->key);
+                qemu_opts_del(subopts_i);
+                goto out;
+            }
+
+            /*
+            if (add_rule(subopts_i, (void *)ard) < 0) {
+                error_setg(errp, "Could not add [%s] rule %i", opts->name, i);
+                goto out;
+            }
+            */
+
+            QDECREF(subqdict_i);
+            subqdict_i = NULL;
+        }
+
+        if (qdict_size(subqdict)) {
+            error_setg(errp, "Unused option '%s' for [%s]",
+                       qdict_first(subqdict)->key, opts->name);
+            goto out;
+        }
+    }
+
+out:
+    QDECREF(subqdict);
+    QDECREF(subqdict_i);
+
+    free(prefix);
+}
+
+void qemu_config_parse_qdict(QDict *options, QemuOptsList **lists,
+                             Error **errp)
+{
+    int i;
+    Error *local_err = NULL;
+
+    for (i = 0; lists[i]; i++) {
+        config_parse_qdict_section(options, lists[i], &local_err);
+        if (error_is_set(&local_err)) {
+            error_propagate(errp, local_err);
+            return;
+        }
+    }
+}
