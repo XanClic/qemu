@@ -271,7 +271,7 @@ static void remove_rule(BlkdebugRule *rule)
     g_free(rule);
 }
 
-static int read_config(BDRVBlkdebugState *s, const char *filename)
+static int read_config(BDRVBlkdebugState *s, const char *filename, Error **errp)
 {
     FILE *f;
     int ret;
@@ -279,11 +279,16 @@ static int read_config(BDRVBlkdebugState *s, const char *filename)
 
     f = fopen(filename, "r");
     if (f == NULL) {
+        error_setg_errno(errp, errno, "Could not read blkdebug config file "
+                         "'%s'", filename);
         return -errno;
     }
 
     ret = qemu_config_parse(f, config_groups, filename);
     if (ret < 0) {
+        error_setg(errp, "Could not parse blkdebug config file '%s'",
+                   filename);
+        ret = -EINVAL;
         goto fail;
     }
 
@@ -370,9 +375,9 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
     /* Read rules from config file */
     config = qemu_opt_get(opts, "config");
     if (config) {
-        ret = read_config(s, config);
-        if (ret < 0) {
-            error_setg_errno(errp, -ret, "Could not read blkdebug config file");
+        ret = read_config(s, config, &local_err);
+        if (ret) {
+            error_propagate(errp, local_err);
             goto fail;
         }
     }
