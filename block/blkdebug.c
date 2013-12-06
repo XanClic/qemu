@@ -100,6 +100,10 @@ static QemuOptsList inject_error_opts = {
             .type = QEMU_OPT_NUMBER,
         },
         {
+            .name = "error",
+            .type = QEMU_OPT_NUMBER,
+        },
+        {
             .name = "sector",
             .type = QEMU_OPT_NUMBER,
         },
@@ -232,7 +236,8 @@ static int add_rule(QemuOpts *opts, void *opaque)
     /* Parse action-specific options */
     switch (d->action) {
     case ACTION_INJECT_ERROR:
-        rule->options.inject.error = qemu_opt_get_number(opts, "errno", EIO);
+        rule->options.inject.error = qemu_opt_get_number(opts,
+                qemu_opt_get(opts, "errno") ? "errno" : "error", EIO);
         rule->options.inject.once  = qemu_opt_get_bool(opts, "once", 0);
         rule->options.inject.immediately =
             qemu_opt_get_bool(opts, "immediately", 0);
