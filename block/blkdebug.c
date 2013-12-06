@@ -368,13 +368,35 @@ static QemuOptsList runtime_opts = {
     },
 };
 
+static int open_image(BlockDriverState **pbs, const char *fname, QDict *options,
+                      const char *bdref_key, int flags, Error **errp)
+{
+    QDict *image_options;
+    int ret;
+    char *bdref_key_dot;
+
+    bdref_key_dot = g_strdup_printf("%s.", bdref_key);
+    qdict_extract_subqdict(options, &image_options, bdref_key_dot);
+    g_free(bdref_key_dot);
+
+    /* Never use bdrv_open() here; if just a filename is given without further
+       options, bdrv_open() will try to open it with the block driver we are
+       about to test. bdrv_file_open() never does this. */
+    ret = bdrv_file_open(pbs, fname, qdict_get_try_str(options, bdref_key),
+                         image_options, flags, errp);
+
+    qdict_del(options, bdref_key);
+
+    return ret;
+}
+
 static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
                          Error **errp)
 {
     BDRVBlkdebugState *s = bs->opaque;
     QemuOpts *opts;
     Error *local_err = NULL;
-    const char *filename, *config;
+    const char *config;
     int ret;
 
     opts = qemu_opts_create_nofail(&runtime_opts);
@@ -396,14 +418,8 @@ static int blkdebug_open(BlockDriverState *bs, QDict *options, int flags,
     s->state = 1;
 
     /* Open the backing file */
-    filename = qemu_opt_get(opts, "x-image");
-    if (filename == NULL) {
-        error_setg(errp, "Could not retrieve image file name");
-        ret = -EINVAL;
-        goto fail;
-    }
-
-    ret = bdrv_file_open(&bs->file, filename, NULL, NULL, flags, &local_err);
+    ret = open_image(&bs->file, qemu_opt_get(opts, "x-image"), options, "image",
+                     flags, &local_err);
     if (ret < 0) {
         error_propagate(errp, local_err);
         goto fail;
