@@ -764,8 +764,8 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
 
         path_combine(extent_path, sizeof(extent_path),
                 desc_file_path, fname);
-        ret = bdrv_file_open(&extent_file, extent_path, NULL, bs->open_flags,
-                             errp);
+        ret = bdrv_file_open(&extent_file, extent_path, NULL, NULL,
+                             bs->open_flags, errp);
         if (ret) {
             return ret;
         }
