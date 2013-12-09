@@ -4166,6 +4166,94 @@
             '*pass-discard-other': 'bool' } }
 
 ##
+# @BlkdebugInjectErrorOptions
+#
+# Describes a single error injection for blkdebug.
+#
+# @event:       trigger event name
+#
+# @state:       #optional the state identifier blkdebug needs to be in to
+#               actually trigger the event; defaults to "any"
+#
+# @error:       #optional error identifier (errno) to be returned; defaults to
+#               EIO
+#
+# @sector:      #optional specifies the sector index which has to be affected
+#               in order to actually trigger the event; defaults to "any
+#               sector"
+#
+# @once:        #optional disables further events after this one has been
+#               triggered; defaults to false
+#
+# @immediately: #optional fail immediately; defaults to false
+#
+# Since: 2.0
+##
+{ 'type': 'BlkdebugInjectErrorOptions',
+  'data': { 'event': 'str',
+            '*state': 'int',
+            '*error': 'int',
+            '*sector': 'int',
+            '*once': 'bool',
+            '*immediately': 'bool' } }
+
+##
+# @BlkdebugSetStateOptions
+#
+# Describes a single state-change event for blkdebug.
+#
+# @event:       trigger event name
+#
+# @state:       #optional the current state identifier blkdebug needs to be in;
+#               defaults to "any"
+#
+# @new_state:   the state identifier blkdebug is supposed to assume if
+#               this event is triggered
+#
+# Since: 2.0
+##
+{ 'type': 'BlkdebugSetStateOptions',
+  'data': { 'event': 'str',
+            '*state': 'int',
+            'new_state': 'int' } }
+
+##
+# @BlockdevOptionsBlkdebug
+#
+# Driver specific block device options for blkdebug.
+#
+# @image:           underlying raw block device (or image file)
+#
+# @config:          #optional filename of the configuration file
+#
+# @inject-error:    #optional array of error injection descriptions
+#
+# @set-state:       #optional array of state-change descriptions
+#
+# Since: 2.0
+##
+{ 'type': 'BlockdevOptionsBlkdebug',
+  'data': { 'image': 'BlockdevRef',
+            '*config': 'str',
+            '*inject-error': ['BlkdebugInjectErrorOptions'],
+            '*set-state': ['BlkdebugSetStateOptions'] } }
+
+##
+# @BlockdevOptionsBlkverify
+#
+# Driver specific block device options for blkverify.
+#
+# @test:    block device to be tested
+#
+# @raw:     raw image used for verification
+#
+# Since: 2.0
+##
+{ 'type': 'BlockdevOptionsBlkverify',
+  'data': { 'test': 'BlockdevRef',
+            'raw': 'BlockdevRef' } }
+
+##
 # @BlockdevOptions
 #
 # Options for creating a block device.
@@ -4189,10 +4277,8 @@
 # TODO sheepdog: Wait for structured options
 # TODO ssh: Should take InetSocketAddress for 'host'?
       'vvfat':      'BlockdevOptionsVVFAT',
-
-# TODO blkdebug: Wait for structured options
-# TODO blkverify: Wait for structured options
-
+      'blkdebug':   'BlockdevOptionsBlkdebug',
+      'blkverify':  'BlockdevOptionsBlkverify',
       'bochs':      'BlockdevOptionsGenericFormat',
       'cloop':      'BlockdevOptionsGenericFormat',
       'cow':        'BlockdevOptionsGenericCOWFormat',
