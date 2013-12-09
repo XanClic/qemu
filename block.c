@@ -1147,11 +1147,14 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
     qdict_extract_subqdict(options, &file_options, "file.");
     file_reference = qdict_get_try_str(options, "file");
 
-    ret = bdrv_file_open(&file, filename, file_reference, file_options,
-                         bdrv_open_flags(bs, flags | BDRV_O_UNMAP), &local_err);
-    qdict_del(options, "file");
-    if (ret < 0) {
-        goto fail;
+    if (filename || file_reference || qdict_size(file_options)) {
+        ret = bdrv_file_open(&file, filename, file_reference, file_options,
+                             bdrv_open_flags(bs, flags | BDRV_O_UNMAP),
+                             &local_err);
+        qdict_del(options, "file");
+        if (ret < 0) {
+            goto fail;
+        }
     }
 
     /* Find the right image format driver */
@@ -1180,7 +1183,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
         goto unlink_and_fail;
     }
 
-    if (bs->file != file) {
+    if (file && (bs->file != file)) {
         bdrv_unref(file);
         file = NULL;
     }
