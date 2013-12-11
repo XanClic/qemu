@@ -116,13 +116,46 @@ static QemuOptsList runtime_opts = {
     },
 };
 
+static int open_image(BlockDriverState **pbs, const char *fname, QDict *options,
+                      const char *bdref_key, int flags, Error **errp)
+{
+    QDict *image_options;
+    int ret;
+    char *bdref_key_dot;
+
+    bdref_key_dot = g_strdup_printf("%s.", bdref_key);
+    qdict_extract_subqdict(options, &image_options, bdref_key_dot);
+    g_free(bdref_key_dot);
+
+    if (fname) {
+        /* If a filename is given, use bdrv_open() in order to use the correct
+           block driver (instead of just opening the raw image). */
+
+        if (qdict_get_try_str(options, bdref_key)) {
+            error_setg(errp, "Cannot reference an existing block device while "
+                       "giving a filename");
+            ret = -EINVAL;
+            goto fail;
+        }
+
+        *pbs = bdrv_new("");
+        ret = bdrv_open(*pbs, fname, image_options, flags, NULL, errp);
+    } else {
+        ret = bdrv_file_open(pbs, NULL, qdict_get_try_str(options, bdref_key),
+                             image_options, flags, errp);
+    }
+
+fail:
+    qdict_del(options, bdref_key);
+    return ret;
+}
+
 static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
                           Error **errp)
 {
     BDRVBlkverifyState *s = bs->opaque;
     QemuOpts *opts;
     Error *local_err = NULL;
-    const char *filename, *raw;
     int ret;
 
     opts = qemu_opts_create_nofail(&runtime_opts);
@@ -133,33 +166,19 @@ static int blkverify_open(BlockDriverState *bs, QDict *options, int flags,
         goto fail;
     }
 
-    /* Parse the raw image filename */
-    raw = qemu_opt_get(opts, "x-raw");
-    if (raw == NULL) {
-        error_setg(errp, "Could not retrieve raw image filename");
-        ret = -EINVAL;
-        goto fail;
-    }
-
-    ret = bdrv_file_open(&bs->file, raw, NULL, NULL, flags, &local_err);
+    /* Open the raw file */
+    ret = open_image(&bs->file, qemu_opt_get(opts, "x-raw"), options, "raw",
+                     flags, &local_err);
     if (ret < 0) {
         error_propagate(errp, local_err);
         goto fail;
     }
 
     /* Open the test file */
-    filename = qemu_opt_get(opts, "x-image");
-    if (filename == NULL) {
-        error_setg(errp, "Could not retrieve test image filename");
-        ret = -EINVAL;
-        goto fail;
-    }
-
-    s->test_file = bdrv_new("");
-    ret = bdrv_open(s->test_file, filename, NULL, flags, NULL, &local_err);
+    ret = open_image(&s->test_file, qemu_opt_get(opts, "x-image"), options,
+                     "test", flags, &local_err);
     if (ret < 0) {
         error_propagate(errp, local_err);
-        bdrv_unref(s->test_file);
         s->test_file = NULL;
         goto fail;
     }
