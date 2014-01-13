@@ -1039,7 +1039,7 @@ int bdrv_file_open(BlockDriverState **pbs, const char *filename,
     }
 
     if (!drv->bdrv_file_open) {
-        ret = bdrv_open(bs, filename, options, flags, drv, &local_err);
+        ret = bdrv_open(&bs, filename, options, flags, drv, &local_err);
         options = NULL;
     } else {
         ret = bdrv_open_common(bs, NULL, options, flags, drv, &local_err);
@@ -1108,8 +1108,6 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
                                        sizeof(backing_filename));
     }
 
-    bs->backing_hd = bdrv_new("");
-
     if (bs->backing_format[0] != '\0') {
         back_drv = bdrv_find_format(bs->backing_format);
     }
@@ -1118,11 +1116,10 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
     back_flags = bs->open_flags & ~(BDRV_O_RDWR | BDRV_O_SNAPSHOT |
                                     BDRV_O_COPY_ON_READ);
 
-    ret = bdrv_open(bs->backing_hd,
+    ret = bdrv_open(&bs->backing_hd,
                     *backing_filename ? backing_filename : NULL, options,
                     back_flags, back_drv, &local_err);
     if (ret < 0) {
-        bdrv_unref(bs->backing_hd);
         bs->backing_hd = NULL;
         bs->open_flags |= BDRV_O_NO_BACKING;
         error_setg(errp, "Could not open backing file: %s",
@@ -1189,8 +1186,6 @@ int bdrv_open_image(BlockDriverState **pbs, const char *filename,
         /* If a filename is given and the block driver should be detected
            automatically (instead of using none), use bdrv_open() in order to do
            that auto-detection. */
-        BlockDriverState *bs;
-
         if (reference) {
             error_setg(errp, "Cannot reference an existing block device while "
                        "giving a filename");
@@ -1198,13 +1193,8 @@ int bdrv_open_image(BlockDriverState **pbs, const char *filename,
             goto done;
         }
 
-        bs = bdrv_new("");
-        ret = bdrv_open(bs, filename, image_options, flags, NULL, errp);
-        if (ret < 0) {
-            bdrv_unref(bs);
-        } else {
-            *pbs = bs;
-        }
+        *pbs = NULL;
+        ret = bdrv_open(pbs, filename, image_options, flags, NULL, errp);
     } else {
         ret = bdrv_file_open(pbs, filename, reference, image_options, flags,
                              errp);
@@ -1222,14 +1212,17 @@ done:
  * empty set of options. The reference to the QDict belongs to the block layer
  * after the call (even on failure), so if the caller intends to reuse the
  * dictionary, it needs to use QINCREF() before calling bdrv_open.
+ *
+ * If *pbs is NULL, a new BDS will be created with a pointer to it stored there.
+ * If it is not NULL, the referenced BDS will be reused.
  */
-int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
+int bdrv_open(BlockDriverState **pbs, const char *filename, QDict *options,
               int flags, BlockDriver *drv, Error **errp)
 {
     int ret;
     /* TODO: extra byte is a hack to ensure MAX_PATH space on Windows. */
     char tmp_filename[PATH_MAX + 1];
-    BlockDriverState *file = NULL;
+    BlockDriverState *file = NULL, *bs = NULL;
     const char *drvname;
     Error *local_err = NULL;
 
@@ -1238,12 +1231,17 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
         options = qdict_new();
     }
 
+    if (*pbs) {
+        bs = *pbs;
+    } else {
+        bs = bdrv_new("");
+    }
     bs->options = options;
     options = qdict_clone_shallow(options);
 
     /* For snapshot=on, create a temporary qcow2 overlay */
     if (flags & BDRV_O_SNAPSHOT) {
-        BlockDriverState *bs1;
+        BlockDriverState *bs1 = NULL;
         int64_t total_size;
         BlockDriver *bdrv_qcow2;
         QEMUOptionParameter *create_options;
@@ -1253,12 +1251,10 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
            instead of opening 'filename' directly */
 
         /* Get the required size from the image */
-        bs1 = bdrv_new("");
         QINCREF(options);
-        ret = bdrv_open(bs1, filename, options, BDRV_O_NO_BACKING,
+        ret = bdrv_open(&bs1, filename, options, BDRV_O_NO_BACKING,
                         drv, &local_err);
         if (ret < 0) {
-            bdrv_unref(bs1);
             goto fail;
         }
         total_size = bdrv_getlength(bs1) & BDRV_SECTOR_MASK;
@@ -1386,6 +1382,7 @@ int bdrv_open(BlockDriverState *bs, const char *filename, QDict *options,
         bdrv_dev_change_media_cb(bs, true);
     }
 
+    *pbs = bs;
     return 0;
 
 unlink_and_fail:
@@ -1399,13 +1396,20 @@ fail:
     QDECREF(bs->options);
     QDECREF(options);
     bs->options = NULL;
+    if (!*pbs) {
+        bdrv_unref(bs);
+    }
     if (error_is_set(&local_err)) {
         error_propagate(errp, local_err);
     }
     return ret;
 
 close_and_fail:
-    bdrv_close(bs);
+    if (*pbs) {
+        bdrv_close(bs);
+    } else {
+        bdrv_unref(bs);
+    }
     QDECREF(options);
     if (error_is_set(&local_err)) {
         error_propagate(errp, local_err);
@@ -5276,7 +5280,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
     size = get_option_parameter(param, BLOCK_OPT_SIZE);
     if (size && size->value.n == -1) {
         if (backing_file && backing_file->value.s) {
-            BlockDriverState *bs;
+            BlockDriverState *bs = NULL;
             uint64_t size;
             char buf[32];
             int back_flags;
@@ -5285,9 +5289,7 @@ void bdrv_img_create(const char *filename, const char *fmt,
             back_flags =
                 flags & ~(BDRV_O_RDWR | BDRV_O_SNAPSHOT | BDRV_O_NO_BACKING);
 
-            bs = bdrv_new("");
-
-            ret = bdrv_open(bs, backing_file->value.s, NULL, back_flags,
+            ret = bdrv_open(&bs, backing_file->value.s, NULL, back_flags,
                             backing_drv, &local_err);
             if (ret < 0) {
                 error_setg_errno(errp, -ret, "Could not open '%s': %s",
@@ -5295,7 +5297,6 @@ void bdrv_img_create(const char *filename, const char *fmt,
                                  error_get_pretty(local_err));
                 error_free(local_err);
                 local_err = NULL;
-                bdrv_unref(bs);
                 goto out;
             }
             bdrv_get_geometry(bs, &size);

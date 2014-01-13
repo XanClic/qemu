@@ -510,7 +510,7 @@ static DriveInfo *blockdev_init(const char *file, QDict *bs_opts,
     bdrv_flags |= ro ? 0 : BDRV_O_RDWR;
 
     QINCREF(bs_opts);
-    ret = bdrv_open(dinfo->bdrv, file, bs_opts, bdrv_flags, drv, &error);
+    ret = bdrv_open(&dinfo->bdrv, file, bs_opts, bdrv_flags, drv, &error);
 
     if (ret < 0) {
         error_setg(errp, "could not open disk image %s: %s",
@@ -1301,12 +1301,11 @@ static void external_snapshot_prepare(BlkTransactionState *common,
                   qstring_from_str(snapshot_node_name));
     }
 
-    /* We will manually add the backing_hd field to the bs later */
-    state->new_bs = bdrv_new("");
     /* TODO Inherit bs->options or only take explicit options with an
      * extended QMP command? */
-    ret = bdrv_open(state->new_bs, new_image_file, options,
+    ret = bdrv_open(&state->new_bs, new_image_file, options,
                     flags | BDRV_O_NO_BACKING, drv, &local_err);
+    /* We will manually add the backing_hd field to the bs later */
     if (ret != 0) {
         error_propagate(errp, local_err);
     }
@@ -1555,7 +1554,7 @@ static void qmp_bdrv_open_encrypted(BlockDriverState *bs, const char *filename,
     Error *local_err = NULL;
     int ret;
 
-    ret = bdrv_open(bs, filename, NULL, bdrv_flags, drv, &local_err);
+    ret = bdrv_open(&bs, filename, NULL, bdrv_flags, drv, &local_err);
     if (ret < 0) {
         error_propagate(errp, local_err);
         return;
@@ -1906,7 +1905,7 @@ void qmp_drive_backup(const char *device, const char *target,
                       Error **errp)
 {
     BlockDriverState *bs;
-    BlockDriverState *target_bs;
+    BlockDriverState *target_bs = NULL;
     BlockDriverState *source = NULL;
     BlockDriver *drv = NULL;
     Error *local_err = NULL;
@@ -1991,10 +1990,8 @@ void qmp_drive_backup(const char *device, const char *target,
         return;
     }
 
-    target_bs = bdrv_new("");
-    ret = bdrv_open(target_bs, target, NULL, flags, drv, &local_err);
+    ret = bdrv_open(&target_bs, target, NULL, flags, drv, &local_err);
     if (ret < 0) {
-        bdrv_unref(target_bs);
         error_propagate(errp, local_err);
         return;
     }
@@ -2027,7 +2024,7 @@ void qmp_drive_mirror(const char *device, const char *target,
                       Error **errp)
 {
     BlockDriverState *bs;
-    BlockDriverState *source, *target_bs;
+    BlockDriverState *source, *target_bs = NULL;
     BlockDriver *drv = NULL;
     Error *local_err = NULL;
     int flags;
@@ -2135,11 +2132,9 @@ void qmp_drive_mirror(const char *device, const char *target,
     /* Mirroring takes care of copy-on-write using the source's backing
      * file.
      */
-    target_bs = bdrv_new("");
-    ret = bdrv_open(target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv,
+    ret = bdrv_open(&target_bs, target, NULL, flags | BDRV_O_NO_BACKING, drv,
                     &local_err);
     if (ret < 0) {
-        bdrv_unref(target_bs);
         error_propagate(errp, local_err);
         return;
     }
