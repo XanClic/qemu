@@ -958,11 +958,6 @@ static int bdrv_file_open(BlockDriverState **pbs, const char *filename,
     Error *local_err = NULL;
     int ret;
 
-    /* NULL means an empty set of options */
-    if (options == NULL) {
-        options = qdict_new();
-    }
-
     if (reference) {
         if (filename || qdict_size(options)) {
             error_setg(errp, "Cannot reference an existing block device with "
@@ -1228,15 +1223,15 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
     const char *drvname;
     Error *local_err = NULL;
 
+    /* NULL means an empty set of options */
+    if (options == NULL) {
+        options = qdict_new();
+    }
+
     if (flags & BDRV_O_PROTOCOL) {
         assert(!drv);
         return bdrv_file_open(pbs, filename, reference, options,
                               flags & ~BDRV_O_PROTOCOL, errp);
-    }
-
-    /* NULL means an empty set of options */
-    if (options == NULL) {
-        options = qdict_new();
     }
 
     if (reference) {
