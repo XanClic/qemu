@@ -1481,7 +1481,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
      * 2 GB for 64k clusters, and we don't want to have a 2 GB initial file
      * size for any qcow2 image.
      */
-    BlockDriverState* bs;
+    BlockDriverState *bs = NULL;
     QCowHeader *header;
     uint8_t* refcount_table;
     Error *local_err = NULL;
@@ -1493,7 +1493,8 @@ static int qcow2_create2(const char *filename, int64_t total_size,
         return ret;
     }
 
-    ret = bdrv_file_open(&bs, filename, NULL, NULL, BDRV_O_RDWR, &local_err);
+    ret = bdrv_open(&bs, filename, NULL, NULL, BDRV_O_RDWR | BDRV_O_PROTOCOL,
+                    NULL, &local_err);
     if (ret < 0) {
         error_propagate(errp, local_err);
         return ret;
