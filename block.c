@@ -943,9 +943,7 @@ free_and_fail:
  * Opens a file using a protocol (file, host_device, nbd, ...)
  *
  * options is a QDict of options to pass to the block drivers, or NULL for an
- * empty set of options. The reference to the QDict belongs to the block layer
- * after the call (even on failure), so if the caller intends to reuse the
- * dictionary, it needs to use QINCREF() before calling bdrv_file_open.
+ * empty set of options.
  */
 static int bdrv_file_open(BlockDriverState *bs, const char *filename,
                           QDict *options, int flags, Error **errp)
@@ -1010,8 +1008,8 @@ static int bdrv_file_open(BlockDriverState *bs, const char *filename,
     }
 
     if (!drv->bdrv_file_open) {
+        QINCREF(options);
         ret = bdrv_open(&bs, filename, NULL, options, flags, drv, &local_err);
-        options = NULL;
     } else {
         ret = bdrv_open_common(bs, NULL, options, flags, drv, &local_err);
     }
@@ -1020,21 +1018,10 @@ static int bdrv_file_open(BlockDriverState *bs, const char *filename,
         goto fail;
     }
 
-    /* Check if any unknown options were used */
-    if (options && (qdict_size(options) != 0)) {
-        const QDictEntry *entry = qdict_first(options);
-        error_setg(errp, "Block protocol '%s' doesn't support the option '%s'",
-                   drv->format_name, entry->key);
-        ret = -EINVAL;
-        goto fail;
-    }
-    QDECREF(options);
-
     bs->growable = 1;
     return 0;
 
 fail:
-    QDECREF(options);
     return ret;
 }
 
@@ -1238,7 +1225,6 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
         assert(!drv);
         ret = bdrv_file_open(bs, filename, options, flags & ~BDRV_O_PROTOCOL,
                              &local_err);
-        options = NULL;
         if (ret) {
             if (bs->drv) {
                 goto close_and_fail;
@@ -1246,8 +1232,7 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
                 goto fail;
             }
         }
-        *pbs = bs;
-        return 0;
+        goto done;
     }
 
     /* For snapshot=on, create a temporary qcow2 overlay */
@@ -1377,12 +1362,18 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
         }
     }
 
+done:
     /* Check if any unknown options were used */
     if (qdict_size(options) != 0) {
         const QDictEntry *entry = qdict_first(options);
-        error_setg(errp, "Block format '%s' used by device '%s' doesn't "
-                   "support the option '%s'", drv->format_name, bs->device_name,
-                   entry->key);
+        if (flags & BDRV_O_PROTOCOL) {
+            error_setg(errp, "Block protocol '%s' doesn't support the option "
+                       "'%s'", drv->format_name, entry->key);
+        } else {
+            error_setg(errp, "Block format '%s' used by device '%s' doesn't "
+                       "support the option '%s'", drv->format_name,
+                       bs->device_name, entry->key);
+        }
 
         ret = -EINVAL;
         goto close_and_fail;
