@@ -947,17 +947,15 @@ free_and_fail:
  * after the call (even on failure), so if the caller intends to reuse the
  * dictionary, it needs to use QINCREF() before calling bdrv_file_open.
  */
-static int bdrv_file_open(BlockDriverState **pbs, const char *filename,
+static int bdrv_file_open(BlockDriverState *bs, const char *filename,
                           QDict *options, int flags, Error **errp)
 {
-    BlockDriverState *bs = NULL;
     BlockDriver *drv;
     const char *drvname;
     bool allow_protocol_prefix = false;
     Error *local_err = NULL;
     int ret;
 
-    bs = bdrv_new("");
     bs->options = options;
     options = qdict_clone_shallow(options);
 
@@ -1036,7 +1034,6 @@ static int bdrv_file_open(BlockDriverState **pbs, const char *filename,
     QDECREF(options);
 
     bs->growable = 1;
-    *pbs = bs;
     return 0;
 
 fail:
@@ -1044,7 +1041,6 @@ fail:
     if (!bs->drv) {
         QDECREF(bs->options);
     }
-    bdrv_unref(bs);
     return ret;
 }
 
@@ -1235,17 +1231,28 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
         return 0;
     }
 
-    if (flags & BDRV_O_PROTOCOL) {
-        assert(!drv);
-        return bdrv_file_open(pbs, filename, options, flags & ~BDRV_O_PROTOCOL,
-                              errp);
-    }
-
     if (*pbs) {
         bs = *pbs;
     } else {
         bs = bdrv_new("");
     }
+
+    if (flags & BDRV_O_PROTOCOL) {
+        assert(!drv);
+        ret = bdrv_file_open(bs, filename, options, flags & ~BDRV_O_PROTOCOL,
+                             errp);
+        if (ret) {
+            if (*pbs) {
+                bdrv_close(bs);
+            } else {
+                bdrv_unref(bs);
+            }
+        } else {
+            *pbs = bs;
+        }
+        return ret;
+    }
+
     bs->options = options;
     options = qdict_clone_shallow(options);
 
