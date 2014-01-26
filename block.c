@@ -1096,10 +1096,6 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
  * Opens a disk image whose options are given as BlockdevRef in another block
  * device's options.
  *
- * If force_raw is true, bdrv_file_open() will be used, thereby preventing any
- * image format auto-detection. If it is false and a filename is given,
- * bdrv_open() will be used for auto-detection.
- *
  * If allow_none is true, no image will be opened if filename is false and no
  * BlockdevRef is given. *pbs will remain unchanged and 0 will be returned.
  *
@@ -1112,7 +1108,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *options, Error **errp)
  */
 int bdrv_open_image(BlockDriverState **pbs, const char *filename,
                     QDict *options, const char *bdref_key, int flags,
-                    bool force_raw, bool allow_none, Error **errp)
+                    bool allow_none, Error **errp)
 {
     QDict *image_options;
     int ret;
@@ -1135,24 +1131,8 @@ int bdrv_open_image(BlockDriverState **pbs, const char *filename,
         goto done;
     }
 
-    if (filename && !force_raw) {
-        /* If a filename is given and the block driver should be detected
-           automatically (instead of using none), use bdrv_open() in order to do
-           that auto-detection. */
-        if (reference) {
-            error_setg(errp, "Cannot reference an existing block device while "
-                       "giving a filename");
-            ret = -EINVAL;
-            goto done;
-        }
-
-        *pbs = NULL;
-        ret = bdrv_open(pbs, filename, NULL, image_options, flags, NULL, errp);
-    } else {
-        *pbs = NULL;
-        ret = bdrv_open(pbs, filename, reference, image_options,
-                        flags | BDRV_O_PROTOCOL, NULL, errp);
-    }
+    *pbs = NULL;
+    ret = bdrv_open(pbs, filename, reference, image_options, flags, NULL, errp);
 
 done:
     qdict_del(options, bdref_key);
@@ -1308,8 +1288,8 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
     }
 
     ret = bdrv_open_image(&file, filename, options, "file",
-                          bdrv_open_flags(bs, flags | BDRV_O_UNMAP), true, true,
-                          &local_err);
+                          bdrv_open_flags(bs, flags | BDRV_O_UNMAP) |
+                          BDRV_O_PROTOCOL, true, &local_err);
     if (ret < 0) {
         goto fail;
     }
