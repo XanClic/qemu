@@ -1038,9 +1038,6 @@ static int bdrv_file_open(BlockDriverState *bs, const char *filename,
 
 fail:
     QDECREF(options);
-    if (!bs->drv) {
-        QDECREF(bs->options);
-    }
     return ret;
 }
 
@@ -1240,17 +1237,17 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
     if (flags & BDRV_O_PROTOCOL) {
         assert(!drv);
         ret = bdrv_file_open(bs, filename, options, flags & ~BDRV_O_PROTOCOL,
-                             errp);
+                             &local_err);
+        options = NULL;
         if (ret) {
-            if (*pbs) {
-                bdrv_close(bs);
+            if (bs->drv) {
+                goto close_and_fail;
             } else {
-                bdrv_unref(bs);
+                goto fail;
             }
-        } else {
-            *pbs = bs;
         }
-        return ret;
+        *pbs = bs;
+        return 0;
     }
 
     bs->options = options;
