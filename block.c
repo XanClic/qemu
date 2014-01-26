@@ -956,9 +956,6 @@ static int bdrv_file_open(BlockDriverState *bs, const char *filename,
     Error *local_err = NULL;
     int ret;
 
-    bs->options = options;
-    options = qdict_clone_shallow(options);
-
     /* Fetch the file name from the options QDict if necessary */
     if (!filename) {
         filename = qdict_get_try_str(options, "filename");
@@ -1235,6 +1232,9 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
         bs = bdrv_new("");
     }
 
+    bs->options = options;
+    options = qdict_clone_shallow(options);
+
     if (flags & BDRV_O_PROTOCOL) {
         assert(!drv);
         ret = bdrv_file_open(bs, filename, options, flags & ~BDRV_O_PROTOCOL,
@@ -1249,9 +1249,6 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
             goto fail;
         }
     }
-
-    bs->options = options;
-    options = qdict_clone_shallow(options);
 
     /* For snapshot=on, create a temporary qcow2 overlay */
     if (flags & BDRV_O_SNAPSHOT) {
