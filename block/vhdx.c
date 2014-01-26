@@ -1724,7 +1724,7 @@ static int vhdx_create(const char *filename, QEMUOptionParameter *options,
 
     gunichar2 *creator = NULL;
     glong creator_items;
-    BlockDriverState *bs;
+    BlockDriverState *bs = NULL;
     const char *type = NULL;
     VHDXImageType image_type;
     Error *local_err = NULL;
@@ -1797,7 +1797,8 @@ static int vhdx_create(const char *filename, QEMUOptionParameter *options,
         goto exit;
     }
 
-    ret = bdrv_file_open(&bs, filename, NULL, NULL, BDRV_O_RDWR, &local_err);
+    ret = bdrv_open(&bs, filename, NULL, NULL, BDRV_O_RDWR | BDRV_O_PROTOCOL,
+                    NULL, &local_err);
     if (ret < 0) {
         error_propagate(errp, local_err);
         goto exit;
