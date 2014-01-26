@@ -962,14 +962,6 @@ static int bdrv_file_open(BlockDriverState *bs, const char *filename,
     Error *local_err = NULL;
     int ret;
 
-    /* NULL means an empty set of options */
-    if (options == NULL) {
-        options = qdict_new();
-    }
-
-    bs->options = options;
-    options = qdict_clone_shallow(options);
-
     /* Fetch the file name from the options QDict if necessary */
     if (!filename) {
         filename = qdict_get_try_str(options, "filename");
@@ -1044,9 +1036,6 @@ static int bdrv_file_open(BlockDriverState *bs, const char *filename,
 
 fail:
     QDECREF(options);
-    if (!bs->drv) {
-        QDECREF(bs->options);
-    }
     return ret;
 }
 
@@ -1244,24 +1233,27 @@ int bdrv_open(BlockDriverState **pbs, const char *filename,
         bs = bdrv_new("");
     }
 
-    if (flags & BDRV_O_PROTOCOL) {
-        assert(!drv);
-        ret = bdrv_file_open(bs, filename, options, flags & ~BDRV_O_PROTOCOL,
-                             errp);
-        if (ret && !*pbs) {
-            bdrv_unref(bs);
-        } else if (!ret) {
-            *pbs = bs;
-        }
-        return ret;
-    }
-
     /* NULL means an empty set of options */
     if (options == NULL) {
         options = qdict_new();
     }
     bs->options = options;
     options = qdict_clone_shallow(options);
+
+    if (flags & BDRV_O_PROTOCOL) {
+        assert(!drv);
+        ret = bdrv_file_open(bs, filename, options, flags & ~BDRV_O_PROTOCOL,
+                             &local_err);
+        options = NULL;
+        if (!ret) {
+            *pbs = bs;
+            return 0;
+        } else if (bs->drv) {
+            goto close_and_fail;
+        } else {
+            goto fail;
+        }
+    }
 
     /* For snapshot=on, create a temporary qcow2 overlay */
     if (flags & BDRV_O_SNAPSHOT) {
