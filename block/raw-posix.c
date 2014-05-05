@@ -146,6 +146,9 @@ typedef struct BDRVRawState {
     bool has_discard:1;
     bool has_write_zeroes:1;
     bool discard_zeroes:1;
+#if defined CONFIG_FIEMAP && defined SEEK_HOLE && defined SEEK_DATA
+    bool use_seek_hole_data;
+#endif
 } BDRVRawState;
 
 typedef struct BDRVRawReopenState {
@@ -1291,6 +1294,7 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
                                             int64_t sector_num,
                                             int nb_sectors, int *pnum)
 {
+    BDRVRawState *s = bs->opaque;
     off_t start, data, hole;
     int64_t ret;
 
@@ -1303,12 +1307,16 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
     ret = BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | start;
 
 #ifdef CONFIG_FIEMAP
-
-    BDRVRawState *s = bs->opaque;
     struct {
         struct fiemap fm;
         struct fiemap_extent fe;
     } f;
+
+#if defined SEEK_HOLE && defined SEEK_DATA
+    if (s->use_seek_hole_data) {
+        goto try_seek_hole_data;
+    }
+#endif
 
     f.fm.fm_start = start;
     f.fm.fm_length = (int64_t)nb_sectors * BDRV_SECTOR_SIZE;
@@ -1316,9 +1324,14 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
     f.fm.fm_extent_count = 1;
     f.fm.fm_reserved = 0;
     if (ioctl(s->fd, FS_IOC_FIEMAP, &f) == -1) {
+#if defined SEEK_HOLE && defined SEEK_DATA
+        s->use_seek_hole_data = true;
+        goto try_seek_hole_data;
+#else
         /* Assume everything is allocated.  */
         *pnum = nb_sectors;
         return ret;
+#endif
     }
 
     if (f.fm.fm_mapped_extents == 0) {
@@ -1336,10 +1349,11 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
         }
     }
 
-#elif defined SEEK_HOLE && defined SEEK_DATA
+    goto done;
+#endif
 
-    BDRVRawState *s = bs->opaque;
-
+#if defined SEEK_HOLE && defined SEEK_DATA
+try_seek_hole_data:
     hole = lseek(s->fd, start, SEEK_HOLE);
     if (hole == -1) {
         /* -ENXIO indicates that sector_num was past the end of the file.
@@ -1360,11 +1374,12 @@ static int64_t coroutine_fn raw_co_get_block_status(BlockDriverState *bs,
             data = lseek(s->fd, 0, SEEK_END);
         }
     }
-#else
+#elif !defined CONFIG_FIEMAP
     data = 0;
     hole = start + nb_sectors * BDRV_SECTOR_SIZE;
 #endif
 
+done:
     if (data <= start) {
         /* On a data extent, compute sectors to the end of the extent.  */
         *pnum = MIN(nb_sectors, (hole - start) / BDRV_SECTOR_SIZE);
