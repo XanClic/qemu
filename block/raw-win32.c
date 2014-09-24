@@ -417,7 +417,7 @@ static void raw_close(BlockDriverState *bs)
 
     CloseHandle(s->hfile);
     if (bs->open_flags & BDRV_O_TEMPORARY) {
-        unlink(bs->filename);
+        unlink(bs->exact_filename);
     }
 }
 
@@ -485,7 +485,7 @@ static int64_t raw_get_allocated_file_size(BlockDriverState *bs)
                                               DWORD * high);
     get_compressed_t get_compressed;
     struct _stati64 st;
-    const char *filename = bs->filename;
+    const char *filename = bs->exact_filename;
     /* WinNT support GetCompressedFileSize to determine allocate size */
     get_compressed =
         (get_compressed_t) GetProcAddress(GetModuleHandle("kernel32"),
