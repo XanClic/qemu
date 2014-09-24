@@ -210,6 +210,7 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
     bs->sg = bs->file->sg;
 
     if (bs->probed && !bdrv_is_read_only(bs)) {
+        char *filename = bdrv_filename_alloc(bs->file);
         fprintf(stderr,
                 "WARNING: Image format was not specified for '%s' and probing "
                 "guessed raw.\n"
@@ -217,7 +218,8 @@ static int raw_open(BlockDriverState *bs, QDict *options, int flags,
                 "raw images, write operations on block 0 will be restricted.\n"
                 "         Specify the 'raw' format explicitly to remove the "
                 "restrictions.\n",
-                bs->file->filename);
+                filename);
+        g_free(filename);
     }
 
     return 0;

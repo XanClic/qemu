@@ -782,13 +782,16 @@ int vhdx_parse_log(BlockDriverState *bs, BDRVVHDXState *s, bool *flushed,
 
     if (logs.valid) {
         if (bs->read_only) {
+            char *filename = bdrv_filename_alloc(bs);
+
             ret = -EPERM;
             error_setg_errno(errp, EPERM,
                              "VHDX image file '%s' opened read-only, but "
                              "contains a log that needs to be replayed.  To "
                              "replay the log, execute:\n qemu-img check -r "
                              "all '%s'",
-                             bs->filename, bs->filename);
+                             filename, filename);
+            g_free(filename);
             goto exit;
         }
         /* now flush the log */

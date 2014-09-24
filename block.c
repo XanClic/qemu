@@ -227,10 +227,10 @@ void bdrv_get_full_backing_filename_from_filename(const char *backed,
 void bdrv_get_full_backing_filename(BlockDriverState *bs, char *dest, size_t sz,
                                     Error **errp)
 {
-    char *backed = bs->exact_filename[0] ? bs->exact_filename : bs->filename;
-
+    char *backed = bdrv_filename_alloc(bs);
     bdrv_get_full_backing_filename_from_filename(backed, bs->backing_file,
                                                  dest, sz, errp);
+    g_free(backed);
 }
 
 void bdrv_register(BlockDriver *bdrv)
@@ -821,6 +821,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     QDict *options, int flags, BlockDriver *drv, Error **errp)
 {
     int ret, open_flags;
+    char *filename_buffer = NULL;
     const char *filename;
     const char *node_name = NULL;
     QemuOpts *opts;
@@ -831,7 +832,8 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     assert(options != NULL && bs->options != options);
 
     if (file != NULL) {
-        filename = file->filename;
+        filename_buffer = bdrv_filename_alloc(file);
+        filename = filename_buffer;
     } else {
         filename = qdict_get_try_str(options, "filename");
     }
@@ -839,7 +841,8 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     if (drv->bdrv_needs_filename && !filename) {
         error_setg(errp, "The '%s' block driver requires a file name",
                    drv->format_name);
-        return -EINVAL;
+        ret = -EINVAL;
+        goto fail_filename;
     }
 
     trace_bdrv_open_common(bs, filename ?: "", flags, drv->format_name);
@@ -888,11 +891,10 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     }
 
     if (filename != NULL) {
-        pstrcpy(bs->filename, sizeof(bs->filename), filename);
+        pstrcpy(bs->exact_filename, sizeof(bs->exact_filename), filename);
     } else {
-        bs->filename[0] = '\0';
+        bs->exact_filename[0] = '\0';
     }
-    pstrcpy(bs->exact_filename, sizeof(bs->exact_filename), bs->filename);
 
     bs->drv = drv;
     bs->opaque = g_malloc0(drv->instance_size);
@@ -952,6 +954,7 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     assert((bs->request_alignment != 0) || bdrv_is_sg(bs));
 
     qemu_opts_del(opts);
+    g_free(filename_buffer);
     return 0;
 
 free_and_fail:
@@ -961,6 +964,8 @@ free_and_fail:
     bs->drv = NULL;
 fail_opts:
     qemu_opts_del(opts);
+fail_filename:
+    g_free(filename_buffer);
     return ret;
 }
 
@@ -1158,7 +1163,7 @@ void bdrv_set_backing_hd(BlockDriverState *bs, BlockDriverState *backing_hd)
     }
     bs->backing_child = bdrv_attach_child(bs, backing_hd, &child_backing);
     bs->open_flags &= ~BDRV_O_NO_BACKING;
-    pstrcpy(bs->backing_file, sizeof(bs->backing_file), backing_hd->filename);
+    bdrv_filename(backing_hd, bs->backing_file, sizeof(bs->backing_file));
     pstrcpy(bs->backing_format, sizeof(bs->backing_format),
             backing_hd->drv ? backing_hd->drv->format_name : "");
 
@@ -1559,7 +1564,7 @@ static int bdrv_open_inherit(BlockDriverState **pbs, const char *filename,
         }
     }
 
-    bdrv_filename(bs, bs->filename, sizeof(bs->filename));
+    bdrv_refresh_filename(bs);
 
     /* For snapshot=on, create a temporary qcow2 overlay. bs points to the
      * temporary snapshot afterwards. */
@@ -1823,8 +1828,10 @@ int bdrv_reopen_prepare(BDRVReopenState *reopen_state, BlockReopenQueue *queue,
             if (local_err != NULL) {
                 error_propagate(errp, local_err);
             } else {
+                char *filename = bdrv_filename_alloc(reopen_state->bs);
                 error_setg(errp, "failed while preparing to reopen image '%s'",
-                           reopen_state->bs->filename);
+                           filename);
+                g_free(filename);
             }
             goto error;
         }
@@ -2441,6 +2448,7 @@ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
     BlockDriverState *base_bs = NULL;
     BlockDriverState *new_top_bs = NULL;
     BlkIntermediateStates *intermediate_state, *next;
+    char *base_filename = NULL;
     int ret = -EIO;
 
     QSIMPLEQ_HEAD(states_to_delete, BlkIntermediateStates) states_to_delete;
@@ -2487,7 +2495,10 @@ int bdrv_drop_intermediate(BlockDriverState *active, BlockDriverState *top,
     }
 
     /* success - we can delete the intermediate states, and link top->base */
-    backing_file_str = backing_file_str ? backing_file_str : base_bs->filename;
+    if (!backing_file_str) {
+        base_filename = bdrv_filename_alloc(base_bs);
+        backing_file_str = base_filename;
+    }
     ret = bdrv_change_backing_file(new_top_bs, backing_file_str,
                                    base_bs->drv ? base_bs->drv->format_name : "");
     if (ret) {
@@ -2506,6 +2517,7 @@ exit:
     QSIMPLEQ_FOREACH_SAFE(intermediate_state, &states_to_delete, entry, next) {
         g_free(intermediate_state);
     }
+    g_free(base_filename);
     return ret;
 }
 
@@ -2994,8 +3006,7 @@ char *bdrv_get_encrypted_filename(BlockDriverState *bs, char *dest, size_t sz)
         pstrcpy(dest, sz, bs->backing_file);
         return dest;
     } else if (bs->encrypted) {
-        pstrcpy(dest, sz, bs->filename);
-        return dest;
+        return bdrv_filename(bs, dest, sz);
     } else {
         dest[0] = '\0';
         return NULL;
@@ -3096,7 +3107,7 @@ int bdrv_is_snapshot(BlockDriverState *bs)
 }
 
 /* backing_file can either be relative, or absolute, or a protocol.  If it is
- * relative, it must be relative to the chain.  So, passing in bs->filename
+ * relative, it must be relative to the chain.  So, passing in the filename
  * from a BDS as backing_file should not be done, as that may be relative to
  * the CWD rather than the chain. */
 BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
@@ -3131,18 +3142,20 @@ BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
         } else {
             /* If not an absolute filename path, make it relative to the current
              * image's filename path */
-            path_combine(filename_tmp, PATH_MAX, curr_bs->filename,
-                         backing_file);
+            char *curr_filename = bdrv_filename_alloc(curr_bs);
+            path_combine(filename_tmp, PATH_MAX, curr_filename, backing_file);
 
             /* We are going to compare absolute pathnames */
             if (!realpath(filename_tmp, filename_full)) {
+                g_free(curr_filename);
                 continue;
             }
 
             /* We need to make sure the backing filename we are comparing against
              * is relative to the current image filename (or absolute) */
-            path_combine(filename_tmp, PATH_MAX, curr_bs->filename,
+            path_combine(filename_tmp, PATH_MAX, curr_filename,
                          curr_bs->backing_file);
+            g_free(curr_filename);
 
             if (!realpath(filename_tmp, backing_file_full)) {
                 continue;
