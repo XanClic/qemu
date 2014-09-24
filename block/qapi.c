@@ -38,7 +38,8 @@ BlockDeviceInfo *bdrv_block_device_info(BlockDriverState *bs, Error **errp)
     BlockDriverState *bs0;
     BlockDeviceInfo *info = g_malloc0(sizeof(*info));
 
-    info->file                   = g_strdup(bs->filename);
+    info->file                   = bdrv_filename(bs, g_malloc(PATH_MAX),
+                                                 PATH_MAX);
     info->ro                     = bs->read_only;
     info->drv                    = g_strdup(bs->drv->format_name);
     info->encrypted              = bs->encrypted;
@@ -218,7 +219,7 @@ void bdrv_query_image_info(BlockDriverState *bs,
     }
 
     info = g_new0(ImageInfo, 1);
-    info->filename        = g_strdup(bs->filename);
+    info->filename        = bdrv_filename(bs, g_malloc(PATH_MAX), PATH_MAX);
     info->format          = g_strdup(bdrv_get_format_name(bs));
     info->virtual_size    = size;
     info->actual_size     = bdrv_get_allocated_file_size(bs);

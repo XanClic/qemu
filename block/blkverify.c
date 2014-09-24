@@ -309,8 +309,7 @@ static void blkverify_refresh_filename(BlockDriverState *bs)
     BDRVBlkverifyState *s = bs->opaque;
 
     /* bs->file has already been refreshed */
-    bdrv_filename(s->test_file, s->test_file->filename,
-                  sizeof(s->test_file->filename));
+    bdrv_refresh_filename(s->test_file);
 
     if (bs->file->full_open_options && s->test_file->full_open_options) {
         QDict *opts = qdict_new();

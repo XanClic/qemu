@@ -227,9 +227,11 @@ bool drive_check_orphaned(void)
         /* Unless this is a default drive, this may be an oversight. */
         if (!blk_get_attached_dev(blk) && !dinfo->is_default &&
             dinfo->type != IF_NONE) {
+            char filename[PATH_MAX];
+            bdrv_filename(blk_bs(blk), filename, sizeof(filename));
             fprintf(stderr, "Warning: Orphaned drive without device: "
                     "id=%s,file=%s,if=%s,bus=%d,unit=%d\n",
-                    blk_name(blk), blk_bs(blk)->filename, if_name[dinfo->type],
+                    blk_name(blk), filename, if_name[dinfo->type],
                     dinfo->bus, dinfo->unit);
             rs = true;
         }
@@ -1507,8 +1509,10 @@ static void external_snapshot_prepare(BlkTransactionState *common,
 
     /* create new image w/backing file */
     if (mode != NEW_IMAGE_MODE_EXISTING) {
+        char old_filename[PATH_MAX];
+        bdrv_filename(state->old_bs, old_filename, sizeof(old_filename));
         bdrv_img_create(new_image_file, format,
-                        state->old_bs->filename,
+                        old_filename,
                         state->old_bs->drv->format_name,
                         NULL, -1, flags, &local_err, false);
         if (local_err) {
@@ -2388,7 +2392,9 @@ void qmp_block_commit(const char *device,
     top_bs = bs;
 
     if (has_top && top) {
-        if (strcmp(bs->filename, top) != 0) {
+        char filename[PATH_MAX];
+        bdrv_filename(bs, filename, sizeof(filename));
+        if (strcmp(filename, top) != 0) {
             top_bs = bdrv_find_backing_image(bs, top);
         }
     }
@@ -2536,7 +2542,9 @@ void qmp_drive_backup(const char *device, const char *target,
     if (mode != NEW_IMAGE_MODE_EXISTING) {
         assert(format && drv);
         if (source) {
-            bdrv_img_create(target, format, source->filename,
+            char source_filename[PATH_MAX];
+            bdrv_filename(source, source_filename, sizeof(source_filename));
+            bdrv_img_create(target, format, source_filename,
                             source->drv->format_name, NULL,
                             size, flags, &local_err, false);
         } else {
@@ -2781,13 +2789,16 @@ void qmp_drive_mirror(const char *device, const char *target,
         bdrv_img_create(target, format,
                         NULL, NULL, NULL, size, flags, &local_err, false);
     } else {
+        char source_filename[PATH_MAX];
+
         switch (mode) {
         case NEW_IMAGE_MODE_EXISTING:
             break;
         case NEW_IMAGE_MODE_ABSOLUTE_PATHS:
             /* create new image with backing file */
+            bdrv_filename(source, source_filename, sizeof(source_filename));
             bdrv_img_create(target, format,
-                            source->filename,
+                            source_filename,
                             source->drv->format_name,
                             NULL, size, flags, &local_err, false);
             break;

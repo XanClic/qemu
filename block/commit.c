@@ -227,7 +227,9 @@ void commit_start(BlockDriverState *bs, BlockDriverState *base,
     overlay_bs = bdrv_find_overlay(bs, top);
 
     if (overlay_bs == NULL) {
-        error_setg(errp, "Could not find overlay image for %s:", top->filename);
+        char top_filename[PATH_MAX];
+        bdrv_filename(top, top_filename, sizeof(top_filename));
+        error_setg(errp, "Could not find overlay image for %s:", top_filename);
         return;
     }
 
