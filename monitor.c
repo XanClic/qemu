@@ -5292,10 +5292,12 @@ int monitor_read_bdrv_key_start(Monitor *mon, BlockDriverState *bs,
                                 BlockCompletionFunc *completion_cb,
                                 void *opaque)
 {
+    char enc_filename[PATH_MAX];
     int err;
 
+    bdrv_get_encrypted_filename(bs, enc_filename, sizeof(enc_filename));
     monitor_printf(mon, "%s (%s) is encrypted.\n", bdrv_get_device_name(bs),
-                   bdrv_get_encrypted_filename(bs));
+                   enc_filename);
 
     mon->password_completion_cb = completion_cb;
     mon->password_opaque = opaque;
