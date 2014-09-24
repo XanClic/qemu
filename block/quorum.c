@@ -1003,7 +1003,7 @@ static void quorum_refresh_filename(BlockDriverState *bs)
     int i;
 
     for (i = 0; i < s->num_children; i++) {
-        bdrv_refresh_filename(s->bs[i]);
+        bdrv_filename(s->bs[i], s->bs[i]->filename, sizeof(s->bs[i]->filename));
         if (!s->bs[i]->full_open_options) {
             return;
         }
