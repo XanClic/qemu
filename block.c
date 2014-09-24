@@ -918,8 +918,8 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     if (ret < 0) {
         if (local_err) {
             error_propagate(errp, local_err);
-        } else if (bs->filename[0]) {
-            error_setg_errno(errp, -ret, "Could not open '%s'", bs->filename);
+        } else if (bs->exact_filename[0]) {
+            error_setg_errno(errp, -ret, "Could not open '%s'", bs->exact_filename);
         } else {
             error_setg_errno(errp, -ret, "Could not open image");
         }

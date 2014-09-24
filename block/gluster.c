@@ -358,7 +358,7 @@ static int qemu_gluster_reopen_prepare(BDRVReopenState *state,
 
     gconf = g_new0(GlusterConf, 1);
 
-    reop_s->glfs = qemu_gluster_init(gconf, state->bs->filename, errp);
+    reop_s->glfs = qemu_gluster_init(gconf, state->bs->exact_filename, errp);
     if (reop_s->glfs == NULL) {
         ret = -errno;
         goto exit;

@@ -671,7 +671,7 @@ static int raw_reopen_prepare(BDRVReopenState *state,
     /* If we cannot use fcntl, or fcntl failed, fall back to qemu_open() */
     if (raw_s->fd == -1) {
         assert(!(raw_s->open_flags & O_CREAT));
-        raw_s->fd = qemu_open(state->bs->filename, raw_s->open_flags);
+        raw_s->fd = qemu_open(state->bs->exact_filename, raw_s->open_flags);
         if (raw_s->fd == -1) {
             error_setg_errno(errp, errno, "Could not reopen file");
             ret = -1;
@@ -2195,7 +2195,7 @@ static int fd_open(BlockDriverState *bs)
             DPRINTF("No floppy (open delayed)\n");
             return -EIO;
         }
-        s->fd = qemu_open(bs->filename, s->open_flags & ~O_NONBLOCK);
+        s->fd = qemu_open(bs->exact_filename, s->open_flags & ~O_NONBLOCK);
         if (s->fd < 0) {
             s->fd_error_time = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
             s->fd_got_error = 1;
@@ -2486,7 +2486,7 @@ static void floppy_eject(BlockDriverState *bs, bool eject_flag)
         qemu_close(s->fd);
         s->fd = -1;
     }
-    fd = qemu_open(bs->filename, s->open_flags | O_NONBLOCK);
+    fd = qemu_open(bs->exact_filename, s->open_flags | O_NONBLOCK);
     if (fd >= 0) {
         if (ioctl(fd, FDEJECT, 0) < 0)
             perror("FDEJECT");
@@ -2710,7 +2710,7 @@ static int cdrom_reopen(BlockDriverState *bs)
      */
     if (s->fd >= 0)
         qemu_close(s->fd);
-    fd = qemu_open(bs->filename, s->open_flags, 0644);
+    fd = qemu_open(bs->exact_filename, s->open_flags, 0644);
     if (fd < 0) {
         s->fd = -1;
         return -EIO;
