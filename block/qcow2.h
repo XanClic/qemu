@@ -162,6 +162,9 @@ typedef struct QCowSnapshot {
 struct Qcow2Cache;
 typedef struct Qcow2Cache Qcow2Cache;
 
+struct Qcow2MetadataList;
+typedef struct Qcow2MetadataList Qcow2MetadataList;
+
 typedef struct Qcow2UnknownHeaderExtension {
     uint32_t magic;
     uint32_t len;
@@ -272,6 +275,7 @@ typedef struct BDRVQcowState {
 
     bool discard_passthrough[QCOW2_DISCARD_MAX];
 
+    Qcow2MetadataList *metadata_list;
     int overlap_check; /* bitmask of Qcow2MetadataOverlap values */
     bool signaled_corruption;
 
@@ -588,5 +592,14 @@ int qcow2_cache_get(BlockDriverState *bs, Qcow2Cache *c, uint64_t offset,
 int qcow2_cache_get_empty(BlockDriverState *bs, Qcow2Cache *c, uint64_t offset,
     void **table);
 void qcow2_cache_put(BlockDriverState *bs, Qcow2Cache *c, void **table);
+
+/* qcow2-overlap.c functions */
+int qcow2_create_empty_metadata_list(BlockDriverState *bs, size_t cache_size,
+                                     Error **errp);
+void qcow2_metadata_list_destroy(BlockDriverState *bs);
+void qcow2_metadata_list_enter(BlockDriverState *bs, uint64_t offset,
+                               int nb_clusters, QCow2MetadataOverlap type);
+void qcow2_metadata_list_remove(BlockDriverState *bs, uint64_t offset,
+                                int nb_clusters, QCow2MetadataOverlap type);
 
 #endif
