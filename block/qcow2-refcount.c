@@ -579,6 +579,14 @@ static int alloc_refcount_block(BlockDriverState *bs,
     s->refcount_table_size = table_size;
     s->refcount_table_offset = table_offset;
 
+    qcow2_metadata_list_remove(bs, old_table_offset,
+                               size_to_clusters(s, old_table_size *
+                                                   sizeof(uint64_t)),
+                               QCOW2_OL_REFCOUNT_TABLE);
+
+    qcow2_metadata_list_enter(bs, table_offset, table_clusters,
+                              QCOW2_OL_REFCOUNT_TABLE);
+
     /* Free old table. */
     qcow2_free_clusters(bs, old_table_offset, old_table_size * sizeof(uint64_t),
                         QCOW2_DISCARD_OTHER);
@@ -2150,6 +2158,16 @@ write_refblocks:
         fprintf(stderr, "ERROR setting reftable: %s\n", strerror(-ret));
         goto fail;
     }
+
+    qcow2_metadata_list_remove(bs, s->refcount_table_offset,
+                               size_to_clusters(s, s->refcount_table_size
+                                                   * sizeof(uint64_t)),
+                               QCOW2_OL_REFCOUNT_TABLE);
+
+    qcow2_metadata_list_enter(bs, reftable_offset,
+                              size_to_clusters(s, reftable_size *
+                                                  sizeof(uint64_t)),
+                              QCOW2_OL_REFCOUNT_TABLE);
 
     for (refblock_index = 0; refblock_index < reftable_size; refblock_index++) {
         be64_to_cpus(&on_disk_reftable[refblock_index]);
