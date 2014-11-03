@@ -1043,6 +1043,12 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
             if (addend != 0) {
                 refcount = qcow2_update_cluster_refcount(bs, l2_offset >>
                         s->cluster_bits, addend, QCOW2_DISCARD_SNAPSHOT);
+                if (addend < 0) {
+                    if (!l1_allocated) {
+                        qcow2_metadata_list_remove(bs, l2_offset, 1,
+                                                   QCOW2_OL_ACTIVE_L2);
+                    }
+                }
             } else {
                 refcount = qcow2_get_refcount(bs, l2_offset >> s->cluster_bits);
             }
