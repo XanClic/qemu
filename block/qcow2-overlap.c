@@ -356,12 +356,8 @@ static int single_check_metadata_overlap(Qcow2MetadataList *mdl, int ign,
     return window->bitmap[bitmap_i] & ~ign;
 }
 
-/* This will replace qcow2_check_metadata_overlap() */
-static int check_metadata_overlap(BlockDriverState *bs, int ign, int64_t offset,
-                                  int64_t size) __attribute__((used));
-
-static int check_metadata_overlap(BlockDriverState *bs, int ign, int64_t offset,
-                                  int64_t size)
+int qcow2_check_metadata_overlap(BlockDriverState *bs, int ign, int64_t offset,
+                                 int64_t size)
 {
     BDRVQcowState *s = bs->opaque;
     uint64_t start_cluster = offset >> s->cluster_bits;
