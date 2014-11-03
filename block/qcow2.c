@@ -792,6 +792,10 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
         error_setg(errp, "Invalid reference count table offset");
         goto fail;
     }
+    qcow2_metadata_list_enter(bs, s->refcount_table_offset,
+                              size_to_clusters(s, s->refcount_table_size *
+                                                  sizeof(uint64_t)),
+                              QCOW2_OL_REFCOUNT_TABLE);
 
     /* Snapshot table offset/length */
     if (header.nb_snapshots > QCOW_MAX_SNAPSHOTS) {
