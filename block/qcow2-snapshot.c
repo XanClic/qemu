@@ -560,6 +560,13 @@ int qcow2_snapshot_goto(BlockDriverState *bs, const char *snapshot_id)
     g_free(sn_l1_table);
     sn_l1_table = NULL;
 
+    for (i = 0; i < s->l1_size; i++) {
+        uint64_t l2_offset = s->l1_table[i] & L1E_OFFSET_MASK;
+        if (l2_offset) {
+            qcow2_metadata_list_enter(bs, l2_offset, 1, QCOW2_OL_ACTIVE_L2);
+        }
+    }
+
     /*
      * Update QCOW_OFLAG_COPIED in the active L1 table (it may have changed
      * when we decreased the refcount of the old snapshot.
@@ -724,6 +731,13 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs,
                                                    sizeof(uint64_t)),
                                QCOW2_OL_ACTIVE_L1);
 
+    for (i = 0; i < s->l1_size; i++) {
+        uint64_t l2_offset = s->l1_table[i] & L1E_OFFSET_MASK;
+        if (l2_offset) {
+            qcow2_metadata_list_remove(bs, l2_offset, 1, QCOW2_OL_ACTIVE_L2);
+        }
+    }
+
     /* Switch the L1 table */
     qemu_vfree(s->l1_table);
 
@@ -739,6 +753,13 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs,
                               size_to_clusters(s, s->l1_size *
                                                   sizeof(uint64_t)),
                               QCOW2_OL_ACTIVE_L1);
+
+    for (i = 0; i < s->l1_size; i++) {
+        uint64_t l2_offset = s->l1_table[i] & L1E_OFFSET_MASK;
+        if (l2_offset) {
+            qcow2_metadata_list_enter(bs, l2_offset, 1, QCOW2_OL_ACTIVE_L2);
+        }
+    }
 
     return 0;
 }

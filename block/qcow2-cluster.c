@@ -285,6 +285,8 @@ static int l2_allocate(BlockDriverState *bs, int l1_index, uint64_t **table)
         goto fail;
     }
 
+    qcow2_metadata_list_enter(bs, l2_offset, 1, QCOW2_OL_ACTIVE_L2);
+
     *table = l2_table;
     trace_qcow2_l2_allocate_done(bs, l1_index, 0);
     return 0;
