@@ -844,6 +844,10 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
     }
     s->l1_table_offset = header.l1_table_offset;
 
+    qcow2_metadata_list_enter(bs, s->l1_table_offset,
+                              size_to_clusters(s, s->l1_size *
+                                                  sizeof(uint64_t)),
+                              QCOW2_OL_ACTIVE_L1);
 
     if (s->l1_size > 0) {
         s->l1_table = qemu_try_blockalign(bs->file,
