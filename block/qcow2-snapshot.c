@@ -263,8 +263,18 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
     /* free the old snapshot table */
     qcow2_free_clusters(bs, s->snapshots_offset, s->snapshots_size,
                         QCOW2_DISCARD_SNAPSHOT);
+
+    qcow2_metadata_list_remove(bs, s->snapshots_offset,
+                               size_to_clusters(s, s->snapshots_size),
+                               QCOW2_OL_SNAPSHOT_TABLE);
+
     s->snapshots_offset = snapshots_offset;
     s->snapshots_size = snapshots_size;
+
+    qcow2_metadata_list_enter(bs, s->snapshots_offset,
+                              size_to_clusters(s, s->snapshots_size),
+                              QCOW2_OL_SNAPSHOT_TABLE);
+
     return 0;
 
 fail:

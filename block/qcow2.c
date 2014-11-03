@@ -811,6 +811,12 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
         error_setg(errp, "Invalid snapshot table offset");
         goto fail;
     }
+    if (header.nb_snapshots) {
+        qcow2_metadata_list_enter(bs, header.snapshots_offset,
+                                  size_to_clusters(s, header.nb_snapshots *
+                                                   sizeof(QCowSnapshotHeader)),
+                                  QCOW2_OL_SNAPSHOT_TABLE);
+    }
 
     /* read the level 1 table */
     if (header.l1_size > QCOW_MAX_L1_SIZE / sizeof(uint64_t)) {
