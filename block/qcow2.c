@@ -863,8 +863,14 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
             error_setg_errno(errp, -ret, "Could not read L1 table");
             goto fail;
         }
-        for(i = 0;i < s->l1_size; i++) {
+        for (i = 0; i < s->l1_size; i++) {
+            uint64_t l2_offset;
+
             be64_to_cpus(&s->l1_table[i]);
+            l2_offset = s->l1_table[i] & L1E_OFFSET_MASK;
+            if (l2_offset) {
+                qcow2_metadata_list_enter(bs, l2_offset, 1, QCOW2_OL_ACTIVE_L2);
+            }
         }
     }
 
