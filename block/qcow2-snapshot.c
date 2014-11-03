@@ -122,6 +122,21 @@ int qcow2_read_snapshots(BlockDriverState *bs)
             ret = -EFBIG;
             goto fail;
         }
+
+        if (!(s->overlap_check & QCOW2_OL_INACTIVE_L1)) {
+            continue;
+        }
+
+        if (sn->l1_size > INT_MAX / sizeof(uint64_t)) {
+            /* Do not fail opening the image because a snapshot is broken which
+             * might not be used anyway */
+            continue;
+        }
+
+        qcow2_metadata_list_enter(bs, sn->l1_table_offset,
+                                  size_to_clusters(s, sn->l1_size *
+                                                      sizeof(uint64_t)),
+                                  QCOW2_OL_INACTIVE_L1);
     }
 
     assert(offset - s->snapshots_offset <= INT_MAX);
@@ -415,6 +430,11 @@ int qcow2_snapshot_create(BlockDriverState *bs, QEMUSnapshotInfo *sn_info)
     g_free(l1_table);
     l1_table = NULL;
 
+    qcow2_metadata_list_enter(bs, sn->l1_table_offset,
+                              size_to_clusters(s, sn->l1_size *
+                                                  sizeof(uint64_t)),
+                              QCOW2_OL_INACTIVE_L1);
+
     /*
      * Increase the refcounts of all clusters and make sure everything is
      * stable on disk before updating the snapshot table to contain a pointer
@@ -634,6 +654,11 @@ int qcow2_snapshot_delete(BlockDriverState *bs,
      */
     g_free(sn.id_str);
     g_free(sn.name);
+
+    qcow2_metadata_list_remove(bs, sn.l1_table_offset,
+                               size_to_clusters(s, sn.l1_size *
+                                                   sizeof(uint64_t)),
+                               QCOW2_OL_INACTIVE_L1);
 
     /*
      * Now decrease the refcounts of clusters referenced by the snapshot and
