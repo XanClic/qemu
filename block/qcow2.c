@@ -774,6 +774,8 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
         }
     }
 
+    qcow2_metadata_list_enter(bs, 0, 1, QCOW2_OL_MAIN_HEADER);
+
     s->refcount_table_offset = header.refcount_table_offset;
     s->refcount_table_size =
         header.refcount_table_clusters << (s->cluster_bits - 3);
