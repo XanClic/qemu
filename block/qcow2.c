@@ -744,6 +744,14 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
                               overlap_check_template & (1 << i)) << i;
     }
 
+    if (s->overlap_check) {
+        /* TODO: Let the user override this default */
+        ret = qcow2_create_empty_metadata_list(bs, 65536, errp);
+        if (ret < 0) {
+            goto fail;
+        }
+    }
+
     s->l2_bits = s->cluster_bits - 3; /* L2 is always one cluster */
     s->l2_size = 1 << s->l2_bits;
     /* 2^(s->refcount_order - 3) is the refcount width in bytes */
@@ -1007,6 +1015,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
     }
     g_free(s->cluster_cache);
     qemu_vfree(s->cluster_data);
+    qcow2_metadata_list_destroy(bs);
     return ret;
 }
 
@@ -1458,6 +1467,8 @@ static void qcow2_close(BlockDriverState *bs)
     qemu_vfree(s->cluster_data);
     qcow2_refcount_close(bs);
     qcow2_free_snapshots(bs);
+
+    qcow2_metadata_list_destroy(bs);
 }
 
 static void qcow2_invalidate_cache(BlockDriverState *bs, Error **errp)
