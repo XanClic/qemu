@@ -125,6 +125,17 @@ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
     s->l1_table = new_l1_table;
     old_l1_size = s->l1_size;
     s->l1_size = new_l1_size;
+
+    qcow2_metadata_list_remove(bs, old_l1_table_offset,
+                               size_to_clusters(s, old_l1_size *
+                                                   sizeof(uint64_t)),
+                               QCOW2_OL_ACTIVE_L1);
+
+    qcow2_metadata_list_enter(bs, s->l1_table_offset,
+                              size_to_clusters(s, s->l1_size *
+                                                  sizeof(uint64_t)),
+                              QCOW2_OL_ACTIVE_L1);
+
     qcow2_free_clusters(bs, old_l1_table_offset, old_l1_size * sizeof(uint64_t),
                         QCOW2_DISCARD_OTHER);
     return 0;
