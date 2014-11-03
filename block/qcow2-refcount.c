@@ -1211,8 +1211,28 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
                 }
                 if (addend < 0) {
                     if (!l1_allocated) {
+                        /* This is easy */
                         qcow2_metadata_list_remove(bs, l2_offset, 1,
                                                    QCOW2_OL_ACTIVE_L2);
+                    } else {
+                        /* If refcount == 0, this is, too. If refcount > 1, we
+                         * know that there must be some other inactive L2
+                         * reference; and for refcount == 1, if this is an
+                         * active L2 table, this was the last inactive L2
+                         * reference. */
+                        bool remove;
+                        if (refcount == 0) {
+                            remove = true;
+                        } else if (refcount == 1) {
+                            remove = qcow2_check_metadata_overlap(bs,
+                                ~QCOW2_OL_ACTIVE_L2, l2_offset,s->cluster_size);
+                        } else {
+                            remove = false;
+                        }
+                        if (remove) {
+                            qcow2_metadata_list_remove(bs, l2_offset, 1,
+                                                       QCOW2_OL_INACTIVE_L2);
+                        }
                     }
                 }
             }
