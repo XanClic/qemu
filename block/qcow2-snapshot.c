@@ -719,6 +719,11 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs,
         return ret;
     }
 
+    qcow2_metadata_list_remove(bs, s->l1_table_offset,
+                               size_to_clusters(s, s->l1_size *
+                                                   sizeof(uint64_t)),
+                               QCOW2_OL_ACTIVE_L1);
+
     /* Switch the L1 table */
     qemu_vfree(s->l1_table);
 
@@ -729,6 +734,11 @@ int qcow2_snapshot_load_tmp(BlockDriverState *bs,
     for(i = 0;i < s->l1_size; i++) {
         be64_to_cpus(&s->l1_table[i]);
     }
+
+    qcow2_metadata_list_enter(bs, s->l1_table_offset,
+                              size_to_clusters(s, s->l1_size *
+                                                  sizeof(uint64_t)),
+                              QCOW2_OL_ACTIVE_L1);
 
     return 0;
 }
