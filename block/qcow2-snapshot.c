@@ -47,9 +47,10 @@ int qcow2_read_snapshots(BlockDriverState *bs)
     QCowSnapshotHeader h;
     QCowSnapshotExtraData extra;
     QCowSnapshot *sn;
-    int i, id_str_size, name_size;
+    int i, j, id_str_size, name_size;
     int64_t offset;
     uint32_t extra_data_size;
+    uint64_t *l1_table;
     int ret;
 
     if (!s->nb_snapshots) {
@@ -123,11 +124,12 @@ int qcow2_read_snapshots(BlockDriverState *bs)
             goto fail;
         }
 
-        if (!(s->overlap_check & QCOW2_OL_INACTIVE_L1)) {
+        if (!(s->overlap_check & (QCOW2_OL_INACTIVE_L1 | QCOW2_OL_INACTIVE_L2)))
+        {
             continue;
         }
 
-        if (sn->l1_size > INT_MAX / sizeof(uint64_t)) {
+        if (sn->l1_size > QCOW_MAX_L1_SIZE) {
             /* Do not fail opening the image because a snapshot is broken which
              * might not be used anyway */
             continue;
@@ -137,6 +139,34 @@ int qcow2_read_snapshots(BlockDriverState *bs)
                                   size_to_clusters(s, sn->l1_size *
                                                       sizeof(uint64_t)),
                                   QCOW2_OL_INACTIVE_L1);
+
+        if (!(s->overlap_check & QCOW2_OL_INACTIVE_L2)) {
+            continue;
+        }
+
+        l1_table = qemu_try_blockalign(bs->file,
+                                       sn->l1_size * sizeof(uint64_t));
+        if (!l1_table) {
+            /* Do not fail opening the image just because a snapshot's L2 tables
+             * cannot be covered by the overlap checks */
+            continue;
+        }
+
+        ret = bdrv_pread(bs->file, sn->l1_table_offset, l1_table,
+                         sn->l1_size * sizeof(uint64_t));
+        if (ret < 0) {
+            qemu_vfree(l1_table);
+            continue;
+        }
+        for (j = 0; j < sn->l1_size; j++) {
+            uint64_t l2_offset = be64_to_cpu(l1_table[j]) & L1E_OFFSET_MASK;
+            if (l2_offset) {
+                qcow2_metadata_list_enter(bs, l2_offset, 1,
+                                          QCOW2_OL_INACTIVE_L2);
+            }
+        }
+
+        qemu_vfree(l1_table);
     }
 
     assert(offset - s->snapshots_offset <= INT_MAX);
@@ -434,6 +464,13 @@ int qcow2_snapshot_create(BlockDriverState *bs, QEMUSnapshotInfo *sn_info)
                               size_to_clusters(s, sn->l1_size *
                                                   sizeof(uint64_t)),
                               QCOW2_OL_INACTIVE_L1);
+
+    for (i = 0; i < s->l1_size; i++) {
+        uint64_t l2_offset = s->l1_table[i] & L1E_OFFSET_MASK;
+        if (l2_offset) {
+            qcow2_metadata_list_enter(bs, l2_offset, 1, QCOW2_OL_INACTIVE_L2);
+        }
+    }
 
     /*
      * Increase the refcounts of all clusters and make sure everything is
