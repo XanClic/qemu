@@ -1132,6 +1132,20 @@ fail:
 /* refcount checking functions */
 
 
+static size_t refcount_array_byte_size(BDRVQcowState *s, uint64_t entries)
+{
+    if (s->refcount_order < 3) {
+        /* sub-byte width */
+        int shift = 3 - s->refcount_order;
+        return (entries + (1 << shift) - 1) >> shift;
+    } else if (s->refcount_order == 3) {
+        /* byte width */
+        return entries;
+    } else {
+        /* multiple bytes wide */
+        return entries << (s->refcount_order - 3);
+    }
+}
 
 /*
  * Increases the refcount for a range of clusters in a given refcount table.
@@ -1161,12 +1175,13 @@ static int inc_refcounts(BlockDriverState *bs,
         k = cluster_offset >> s->cluster_bits;
         if (k >= *refcount_table_size) {
             int64_t old_refcount_table_size = *refcount_table_size;
+            size_t new_byte_size;
             void *new_refcount_table;
 
             *refcount_table_size = k + 1;
-            new_refcount_table = g_try_realloc(*refcount_table,
-                                               *refcount_table_size *
-                                               s->refcount_bits / 8);
+            new_byte_size = refcount_array_byte_size(s, *refcount_table_size);
+
+            new_refcount_table = g_try_realloc(*refcount_table, new_byte_size);
             if (!new_refcount_table) {
                 *refcount_table_size = old_refcount_table_size;
                 res->check_errors++;
@@ -1547,6 +1562,7 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
 
             if (fix & BDRV_FIX_ERRORS) {
                 int64_t old_nb_clusters = *nb_clusters;
+                size_t new_byte_size;
                 void *new_refcount_table;
 
                 if (offset > INT64_MAX - s->cluster_size) {
@@ -1567,9 +1583,9 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
                 *nb_clusters = size_to_clusters(s, size);
                 assert(*nb_clusters >= old_nb_clusters);
 
+                new_byte_size = refcount_array_byte_size(s, *nb_clusters);
                 new_refcount_table = g_try_realloc(*refcount_table,
-                                                   *nb_clusters *
-                                                   s->refcount_bits / 8);
+                                                   new_byte_size);
                 if (!new_refcount_table) {
                     *nb_clusters = old_nb_clusters;
                     res->check_errors++;
@@ -1640,7 +1656,8 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
     int ret;
 
     if (!*refcount_table) {
-        *refcount_table = g_try_malloc0(*nb_clusters * s->refcount_bits / 8);
+        size_t byte_size = refcount_array_byte_size(s, *nb_clusters);
+        *refcount_table = g_try_malloc0(byte_size);
         if (*nb_clusters && *refcount_table == NULL) {
             res->check_errors++;
             return -ENOMEM;
@@ -1805,6 +1822,7 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
      * accordingly to append free clusters at the end of the image */
     if (contiguous_free_clusters < cluster_count) {
         int64_t old_imrt_nb_clusters = *imrt_nb_clusters;
+        size_t new_byte_size;
         void *new_refcount_table;
 
         /* contiguous_free_clusters clusters are already empty at the image end;
@@ -1814,9 +1832,8 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
          * may exceed old_imrt_nb_clusters if *first_free_cluster pointed beyond
          * the image end) */
         *imrt_nb_clusters = cluster + cluster_count - contiguous_free_clusters;
-        new_refcount_table = g_try_realloc(*refcount_table,
-                                           *imrt_nb_clusters *
-                                           s->refcount_bits / 8);
+        new_byte_size = refcount_array_byte_size(s, *imrt_nb_clusters);
+        new_refcount_table = g_try_realloc(*refcount_table, new_byte_size);
         if (!new_refcount_table) {
             *imrt_nb_clusters = old_imrt_nb_clusters;
             return -ENOMEM;
@@ -1943,8 +1960,8 @@ write_refblocks:
 
         memcpy(on_disk_refblock, (void *)((uintptr_t)*refcount_table +
                                  (refblock_index << s->refcount_block_bits)),
-               MIN(s->refcount_block_size, *nb_clusters - refblock_start)
-               * s->refcount_bits / 8);
+               refcount_array_byte_size(s, MIN(s->refcount_block_size,
+                                               *nb_clusters - refblock_start)));
 
         ret = bdrv_write(bs->file, refblock_offset / BDRV_SECTOR_SIZE,
                          (void *)on_disk_refblock, s->cluster_sectors);
