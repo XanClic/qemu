@@ -2597,7 +2597,7 @@ static int qcow2_load_vmstate(BlockDriverState *bs, uint8_t *buf,
  * have to be removed.
  */
 static int qcow2_downgrade(BlockDriverState *bs, int target_version,
-                           BlockDriverAmendStatusCB *status_cb)
+                           BlockDriverAmendStatusCB *status_cb, void *cb_opaque)
 {
     BDRVQcowState *s = bs->opaque;
     int current_version = s->qcow_version;
@@ -2646,7 +2646,7 @@ static int qcow2_downgrade(BlockDriverState *bs, int target_version,
     /* clearing autoclear features is trivial */
     s->autoclear_features = 0;
 
-    ret = qcow2_expand_zero_clusters(bs, status_cb);
+    ret = qcow2_expand_zero_clusters(bs, status_cb, cb_opaque);
     if (ret < 0) {
         return ret;
     }
@@ -2661,7 +2661,8 @@ static int qcow2_downgrade(BlockDriverState *bs, int target_version,
 }
 
 static int qcow2_amend_options(BlockDriverState *bs, QemuOpts *opts,
-                               BlockDriverAmendStatusCB *status_cb)
+                               BlockDriverAmendStatusCB *status_cb,
+                               void *cb_opaque)
 {
     BDRVQcowState *s = bs->opaque;
     int old_version = s->qcow_version, new_version = old_version;
@@ -2742,7 +2743,7 @@ static int qcow2_amend_options(BlockDriverState *bs, QemuOpts *opts,
                 return ret;
             }
         } else {
-            ret = qcow2_downgrade(bs, new_version, status_cb);
+            ret = qcow2_downgrade(bs, new_version, status_cb, cb_opaque);
             if (ret < 0) {
                 return ret;
             }
