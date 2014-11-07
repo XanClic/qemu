@@ -1,0 +1,225 @@
+#!/bin/bash
+#
+# Test cases for different refcount_widths
+#
+# Copyright (C) 2014 Red Hat, Inc.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# creator
+owner=mreitz@redhat.com
+
+seq="$(basename $0)"
+echo "QA output created by $seq"
+
+here="$PWD"
+tmp=/tmp/$$
+status=1	# failure is the default!
+
+_cleanup()
+{
+	_cleanup_test_img
+}
+trap "_cleanup; exit \$status" 0 1 2 3 15
+
+# get standard environment, filters and checks
+. ./common.rc
+. ./common.filter
+
+# This tests qocw2-specific low-level functionality
+_supported_fmt qcow2
+_supported_proto file
+_supported_os Linux
+# This test will set refcount_width on its own which would conflict with the
+# manual setting; compat will be overridden as well
+_unsupported_imgopts refcount_width 'compat=0.10'
+
+function print_refcount_width()
+{
+    $QEMU_IMG info "$TEST_IMG" | grep 'refcount width:' | sed -e 's/^ *//'
+}
+
+echo
+echo '=== refcount_width limits ==='
+echo
+
+# Must be positive (non-zero)
+IMGOPTS="$IMGOPTS,refcount_width=0" _make_test_img 64M
+# Must be positive (non-negative)
+IMGOPTS="$IMGOPTS,refcount_width=-1" _make_test_img 64M
+# May not exceed 64
+IMGOPTS="$IMGOPTS,refcount_width=128" _make_test_img 64M
+# Must be a power of two
+IMGOPTS="$IMGOPTS,refcount_width=42" _make_test_img 64M
+
+# 1 is the minimum
+IMGOPTS="$IMGOPTS,refcount_width=1" _make_test_img 64M
+print_refcount_width
+
+# 64 is the maximum
+IMGOPTS="$IMGOPTS,refcount_width=64" _make_test_img 64M
+print_refcount_width
+
+# 16 is the default
+_make_test_img 64M
+print_refcount_width
+
+echo
+echo '=== refcount_width and compat=0.10 ==='
+echo
+
+# Should work
+IMGOPTS="$IMGOPTS,compat=0.10,refcount_width=16" _make_test_img 64M
+print_refcount_width
+
+# Should not work
+IMGOPTS="$IMGOPTS,compat=0.10,refcount_width=1" _make_test_img 64M
+IMGOPTS="$IMGOPTS,compat=0.10,refcount_width=64" _make_test_img 64M
+
+
+echo
+echo '=== Snapshot limit on refcount_width=1 ==='
+echo
+
+IMGOPTS="$IMGOPTS,refcount_width=1" _make_test_img 64M
+print_refcount_width
+
+$QEMU_IO -c 'write 0 512' "$TEST_IMG" | _filter_qemu_io
+
+# Should fail
+$QEMU_IMG snapshot -c foo "$TEST_IMG"
+
+# The new L1 table could/shoud be leaked
+_check_test_img
+
+echo
+echo '=== Snapshot limit on refcount_width=2 ==='
+echo
+
+IMGOPTS="$IMGOPTS,refcount_width=2" _make_test_img 64M
+print_refcount_width
+
+$QEMU_IO -c 'write 0 512' "$TEST_IMG" | _filter_qemu_io
+
+# Should succeed
+$QEMU_IMG snapshot -c foo "$TEST_IMG"
+$QEMU_IMG snapshot -c bar "$TEST_IMG"
+# Should fail (4th reference)
+$QEMU_IMG snapshot -c baz "$TEST_IMG"
+
+# The new L1 table could/shoud be leaked
+_check_test_img
+
+echo
+echo '=== Compressed clusters with refcount_width=1 ==='
+echo
+
+IMGOPTS="$IMGOPTS,refcount_width=1" _make_test_img 64M
+print_refcount_width
+
+# Both should fit into a single host cluster; instead of failing to increase the
+# refcount of that cluster, qemu should just allocate a new cluster and make
+# this operation succeed
+$QEMU_IO -c 'write -P 0 -c  0  64k' \
+         -c 'write -P 1 -c 64k 64k' \
+         "$TEST_IMG" | _filter_qemu_io
+
+_check_test_img
+
+echo
+echo '=== Amend from refcount_width=16 to refcount_width=1 ==='
+echo
+
+_make_test_img 64M
+print_refcount_width
+
+$QEMU_IO -c 'write 16M 32M' "$TEST_IMG" | _filter_qemu_io
+$QEMU_IMG amend -o refcount_width=1 "$TEST_IMG"
+_check_test_img
+print_refcount_width
+
+echo
+echo '=== Amend from refcount_width=1 to refcount_width=64 ==='
+echo
+
+$QEMU_IMG amend -o refcount_width=64 "$TEST_IMG"
+_check_test_img
+print_refcount_width
+
+echo
+echo '=== Amend to compat=0.10 ==='
+echo
+
+# Should not work because refcount_width needs to be 16 for compat=0.10
+$QEMU_IMG amend -o compat=0.10 "$TEST_IMG"
+print_refcount_width
+# Should work
+$QEMU_IMG amend -o compat=0.10,refcount_width=16 "$TEST_IMG"
+_check_test_img
+print_refcount_width
+
+# Get back to compat=1.1 and refcount_width=16
+$QEMU_IMG amend -o compat=1.1 "$TEST_IMG"
+print_refcount_width
+# Should not work
+$QEMU_IMG amend -o refcount_width=32,compat=0.10 "$TEST_IMG"
+print_refcount_width
+
+echo
+echo '=== Amend with snapshot ==='
+echo
+
+$QEMU_IMG snapshot -c foo "$TEST_IMG"
+# Just to have different refcounts across the image
+$QEMU_IO -c 'write 0 16M' "$TEST_IMG" | _filter_qemu_io
+
+# Should not work
+$QEMU_IMG amend -o refcount_width=1 "$TEST_IMG"
+_check_test_img
+print_refcount_width
+
+# Should work
+$QEMU_IMG amend -o refcount_width=2 "$TEST_IMG"
+_check_test_img
+print_refcount_width
+
+echo
+echo '=== Testing too many references for check ==='
+echo
+
+IMGOPTS="$IMGOPTS,refcount_width=1" _make_test_img 64M
+print_refcount_width
+
+# This cluster should be created at 0x50000
+$QEMU_IO -c 'write 0 64k' "$TEST_IMG" | _filter_qemu_io
+# Now make the second L2 entriy (the L2 table should be at 0x40000) point to
+# that cluster, so we have two references
+poke_file "$TEST_IMG" $((0x40008)) "\x80\x00\x00\x00\x00\x05\x00\x00"
+
+# This should say "please use amend"
+_check_test_img -r all
+
+# So we do that
+$QEMU_IMG amend -o refcount_width=2 "$TEST_IMG"
+print_refcount_width
+
+# And try again
+_check_test_img -r all
+
+
+# success, all done
+echo '*** done'
+rm -f $seq.full
+status=0
