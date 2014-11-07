@@ -43,6 +43,10 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 _supported_fmt qcow2
 _supported_proto generic
 _supported_os Linux
+# refcount_width must be at least 4 bits so we can create ten internal snapshots
+# (1 bit supports none, 2 bits support three, 4 bits support 15)
+_unsupported_imgopts 'refcount_width=1[^0-9]' \
+                     'refcount_width=2[^0-9]'
 
 echo
 echo "creating image"

@@ -35,6 +35,13 @@ status=1	# failure is the default!
 _supported_fmt qcow2
 _supported_proto file
 _supported_os Linux
+# Because this would change the output of query-block
+_unsupported_imgopts 'refcount_width=1[^0-9]' \
+                     'refcount_width=2[^0-9]' \
+                     'refcount_width=4[^0-9]' \
+                     'refcount_width=8[^0-9]' \
+                     'refcount_width=32[^0-9]' \
+                     'refcount_width=64[^0-9]'
 
 function do_run_qemu()
 {
