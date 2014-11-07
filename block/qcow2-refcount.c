@@ -1108,6 +1108,54 @@ fail:
 /* refcount checking functions */
 
 
+static size_t refcount_array_byte_size(BDRVQcowState *s, uint64_t entries)
+{
+    if (s->refcount_order < 3) {
+        /* sub-byte width */
+        int shift = 3 - s->refcount_order;
+        return (entries + (1 << shift) - 1) >> shift;
+    } else if (s->refcount_order == 3) {
+        /* byte width */
+        return entries;
+    } else {
+        /* multiple bytes wide */
+
+        /* This assertion holds because there is no way we can address more than
+         * 2^(64 - 9) clusters at once (with cluster size 512 = 2^9, and because
+         * offsets have to be representable in bytes); due to every cluster
+         * corresponding to one refcount entry and because refcount_order has to
+         * be below 7, we are far below that limit */
+        assert(!(entries >> (64 - (s->refcount_order - 3))));
+
+        return entries << (s->refcount_order - 3);
+    }
+}
+
+static int realloc_refcount_array(BDRVQcowState *s, uint16_t **array,
+                                  int64_t *size, int64_t new_size)
+{
+    /* Round to clusters so the array can be directly written to disk */
+    size_t old_byte_size = ROUND_UP(refcount_array_byte_size(s, *size),
+                                    s->cluster_size);
+    size_t new_byte_size = ROUND_UP(refcount_array_byte_size(s, new_size),
+                                    s->cluster_size);
+    uint16_t *new_ptr;
+
+    new_ptr = g_try_realloc(*array, new_byte_size);
+    if (new_byte_size && !new_ptr) {
+        return -ENOMEM;
+    }
+
+    if (new_ptr) {
+        memset((void *)((uintptr_t)new_ptr + old_byte_size), 0,
+               new_byte_size - old_byte_size);
+    }
+
+    *array = new_ptr;
+    *size  = new_size;
+
+    return 0;
+}
 
 /*
  * Increases the refcount for a range of clusters in a given refcount table.
@@ -1124,6 +1172,7 @@ static int inc_refcounts(BlockDriverState *bs,
 {
     BDRVQcowState *s = bs->opaque;
     uint64_t start, last, cluster_offset, k;
+    int ret;
 
     if (size <= 0) {
         return 0;
@@ -1135,23 +1184,12 @@ static int inc_refcounts(BlockDriverState *bs,
         cluster_offset += s->cluster_size) {
         k = cluster_offset >> s->cluster_bits;
         if (k >= *refcount_table_size) {
-            int64_t old_refcount_table_size = *refcount_table_size;
-            uint16_t *new_refcount_table;
-
-            *refcount_table_size = k + 1;
-            new_refcount_table = g_try_realloc(*refcount_table,
-                                               *refcount_table_size *
-                                               sizeof(**refcount_table));
-            if (!new_refcount_table) {
-                *refcount_table_size = old_refcount_table_size;
+            ret = realloc_refcount_array(s, refcount_table,
+                                         refcount_table_size, k + 1);
+            if (ret < 0) {
                 res->check_errors++;
-                return -ENOMEM;
+                return ret;
             }
-            *refcount_table = new_refcount_table;
-
-            memset(*refcount_table + old_refcount_table_size, 0,
-                   (*refcount_table_size - old_refcount_table_size) *
-                   sizeof(**refcount_table));
         }
 
         if (++(*refcount_table)[k] == 0) {
@@ -1518,8 +1556,7 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
                     fix & BDRV_FIX_ERRORS ? "Repairing" : "ERROR", i);
 
             if (fix & BDRV_FIX_ERRORS) {
-                int64_t old_nb_clusters = *nb_clusters;
-                uint16_t *new_refcount_table;
+                int64_t new_nb_clusters;
 
                 if (offset > INT64_MAX - s->cluster_size) {
                     ret = -EINVAL;
@@ -1536,22 +1573,15 @@ static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
                     goto resize_fail;
                 }
 
-                *nb_clusters = size_to_clusters(s, size);
-                assert(*nb_clusters >= old_nb_clusters);
+                new_nb_clusters = size_to_clusters(s, size);
+                assert(new_nb_clusters >= *nb_clusters);
 
-                new_refcount_table = g_try_realloc(*refcount_table,
-                                                   *nb_clusters *
-                                                   sizeof(**refcount_table));
-                if (!new_refcount_table) {
-                    *nb_clusters = old_nb_clusters;
+                ret = realloc_refcount_array(s, refcount_table,
+                                             nb_clusters, new_nb_clusters);
+                if (ret < 0) {
                     res->check_errors++;
-                    return -ENOMEM;
+                    return ret;
                 }
-                *refcount_table = new_refcount_table;
-
-                memset(*refcount_table + old_nb_clusters, 0,
-                       (*nb_clusters - old_nb_clusters) *
-                       sizeof(**refcount_table));
 
                 if (cluster >= *nb_clusters) {
                     ret = -EINVAL;
@@ -1611,10 +1641,12 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
     int ret;
 
     if (!*refcount_table) {
-        *refcount_table = g_try_new0(uint16_t, *nb_clusters);
-        if (*nb_clusters && *refcount_table == NULL) {
+        int64_t old_size = 0;
+        ret = realloc_refcount_array(s, refcount_table,
+                                     &old_size, *nb_clusters);
+        if (ret < 0) {
             res->check_errors++;
-            return -ENOMEM;
+            return ret;
         }
     }
 
@@ -1746,6 +1778,7 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
     int64_t cluster = *first_free_cluster, i;
     bool first_gap = true;
     int contiguous_free_clusters;
+    int ret;
 
     /* Starting at *first_free_cluster, find a range of at least cluster_count
      * continuously free clusters */
@@ -1775,28 +1808,18 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
     /* If no such range could be found, grow the in-memory refcount table
      * accordingly to append free clusters at the end of the image */
     if (contiguous_free_clusters < cluster_count) {
-        int64_t old_imrt_nb_clusters = *imrt_nb_clusters;
-        uint16_t *new_refcount_table;
-
         /* contiguous_free_clusters clusters are already empty at the image end;
          * we need cluster_count clusters; therefore, we have to allocate
          * cluster_count - contiguous_free_clusters new clusters at the end of
          * the image (which is the current value of cluster; note that cluster
          * may exceed old_imrt_nb_clusters if *first_free_cluster pointed beyond
          * the image end) */
-        *imrt_nb_clusters = cluster + cluster_count - contiguous_free_clusters;
-        new_refcount_table = g_try_realloc(*refcount_table,
-                                           *imrt_nb_clusters *
-                                           sizeof(**refcount_table));
-        if (!new_refcount_table) {
-            *imrt_nb_clusters = old_imrt_nb_clusters;
-            return -ENOMEM;
+        ret = realloc_refcount_array(s, refcount_table, imrt_nb_clusters,
+                                     cluster + cluster_count
+                                     - contiguous_free_clusters);
+        if (ret < 0) {
+            return ret;
         }
-        *refcount_table = new_refcount_table;
-
-        memset(*refcount_table + old_imrt_nb_clusters, 0,
-               (*imrt_nb_clusters - old_imrt_nb_clusters) *
-               sizeof(**refcount_table));
     }
 
     /* Go back to the first free cluster */
