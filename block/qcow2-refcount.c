@@ -91,14 +91,14 @@ static int load_refcount_block(BlockDriverState *bs,
  * return value is the refcount of the cluster, negative values are -errno
  * and indicate an error.
  */
-int qcow2_get_refcount(BlockDriverState *bs, int64_t cluster_index)
+int64_t qcow2_get_refcount(BlockDriverState *bs, int64_t cluster_index)
 {
     BDRVQcowState *s = bs->opaque;
     uint64_t refcount_table_index, block_index;
     int64_t refcount_block_offset;
     int ret;
     uint16_t *refcount_block;
-    uint16_t refcount;
+    int64_t refcount;
 
     refcount_table_index = cluster_index >> s->refcount_block_bits;
     if (refcount_table_index >= s->refcount_table_size)
@@ -556,9 +556,10 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
     for(cluster_offset = start; cluster_offset <= last;
         cluster_offset += s->cluster_size)
     {
-        int block_index, refcount;
+        int block_index;
         int64_t cluster_index = cluster_offset >> s->cluster_bits;
         int64_t table_index = cluster_index >> s->refcount_block_bits;
+        int64_t refcount;
 
         /* Load the refcount block and allocate it if needed */
         if (table_index != old_table_index) {
@@ -634,10 +635,10 @@ fail:
  * If the return value is non-negative, it is the new refcount of the cluster.
  * If it is negative, it is -errno and indicates an error.
  */
-int qcow2_update_cluster_refcount(BlockDriverState *bs,
-                                  int64_t cluster_index,
-                                  int addend,
-                                  enum qcow2_discard_type type)
+int64_t qcow2_update_cluster_refcount(BlockDriverState *bs,
+                                      int64_t cluster_index,
+                                      int addend,
+                                      enum qcow2_discard_type type)
 {
     BDRVQcowState *s = bs->opaque;
     int ret;
@@ -663,7 +664,7 @@ static int64_t alloc_clusters_noref(BlockDriverState *bs, uint64_t size)
 {
     BDRVQcowState *s = bs->opaque;
     uint64_t i, nb_clusters;
-    int refcount;
+    int64_t refcount;
 
     nb_clusters = size_to_clusters(s, size);
 retry:
@@ -722,7 +723,8 @@ int qcow2_alloc_clusters_at(BlockDriverState *bs, uint64_t offset,
     BDRVQcowState *s = bs->opaque;
     uint64_t cluster_index;
     uint64_t i;
-    int refcount, ret;
+    int64_t refcount;
+    int ret;
 
     assert(nb_clusters >= 0);
     if (nb_clusters == 0) {
@@ -878,8 +880,8 @@ int qcow2_update_snapshot_refcount(BlockDriverState *bs,
     BDRVQcowState *s = bs->opaque;
     uint64_t *l1_table, *l2_table, l2_offset, offset, l1_size2;
     bool l1_allocated = false;
-    int64_t old_offset, old_l2_offset;
-    int i, j, l1_modified = 0, nb_csectors, refcount;
+    int64_t old_offset, old_l2_offset, refcount;
+    int i, j, l1_modified = 0, nb_csectors;
     int ret;
 
     l2_table = NULL;
@@ -1341,7 +1343,7 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res,
     BDRVQcowState *s = bs->opaque;
     uint64_t *l2_table = qemu_blockalign(bs, s->cluster_size);
     int ret;
-    int refcount;
+    int64_t refcount;
     int i, j;
 
     for (i = 0; i < s->l1_size; i++) {
@@ -1360,7 +1362,7 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res,
         }
         if ((refcount == 1) != ((l1_entry & QCOW_OFLAG_COPIED) != 0)) {
             fprintf(stderr, "%s OFLAG_COPIED L2 cluster: l1_index=%d "
-                    "l1_entry=%" PRIx64 " refcount=%d\n",
+                    "l1_entry=%" PRIx64 " refcount=%" PRId64 "\n",
                     fix & BDRV_FIX_ERRORS ? "Repairing" :
                                             "ERROR",
                     i, l1_entry, refcount);
@@ -1403,7 +1405,7 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res,
                 }
                 if ((refcount == 1) != ((l2_entry & QCOW_OFLAG_COPIED) != 0)) {
                     fprintf(stderr, "%s OFLAG_COPIED data cluster: "
-                            "l2_entry=%" PRIx64 " refcount=%d\n",
+                            "l2_entry=%" PRIx64 " refcount=%" PRId64 "\n",
                             fix & BDRV_FIX_ERRORS ? "Repairing" :
                                                     "ERROR",
                             l2_entry, refcount);
@@ -1628,8 +1630,8 @@ static void compare_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
                               uint16_t *refcount_table, int64_t nb_clusters)
 {
     BDRVQcowState *s = bs->opaque;
-    int64_t i;
-    int refcount1, refcount2, ret;
+    int64_t i, refcount1, refcount2;
+    int ret;
 
     for (i = 0, *highest_cluster = 0; i < nb_clusters; i++) {
         refcount1 = qcow2_get_refcount(bs, i);
@@ -1657,7 +1659,8 @@ static void compare_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
                 num_fixed = &res->corruptions_fixed;
             }
 
-            fprintf(stderr, "%s cluster %" PRId64 " refcount=%d reference=%d\n",
+            fprintf(stderr, "%s cluster %" PRId64 " refcount=%" PRId64
+                    " reference=%" PRId64 "\n",
                    num_fixed != NULL     ? "Repairing" :
                    refcount1 < refcount2 ? "ERROR" :
                                            "Leaked",
