@@ -1640,7 +1640,7 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
     for (i = 0; i < l1_size; i++) {
         uint64_t l2_offset = l1_table[i] & L1E_OFFSET_MASK;
         bool l2_dirty = false;
-        int l2_refcount;
+        int64_t l2_refcount;
 
         if (!l2_offset) {
             /* unallocated */
@@ -1696,14 +1696,17 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
                 }
 
                 if (l2_refcount > 1) {
+                    int64_t ret64;
+
                     /* For shared L2 tables, set the refcount accordingly (it is
                      * already 1 and needs to be l2_refcount) */
-                    ret = qcow2_update_cluster_refcount(bs,
+                    ret64 = qcow2_update_cluster_refcount(bs,
                             offset >> s->cluster_bits, l2_refcount - 1,
                             QCOW2_DISCARD_OTHER);
-                    if (ret < 0) {
+                    if (ret64 < 0) {
                         qcow2_free_clusters(bs, offset, s->cluster_size,
                                             QCOW2_DISCARD_OTHER);
+                        ret = ret64;
                         goto fail;
                     }
                 }
