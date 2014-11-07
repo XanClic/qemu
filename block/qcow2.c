@@ -684,6 +684,15 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
         goto fail;
     }
     s->refcount_order = header.refcount_order;
+    s->refcount_bits = 1 << s->refcount_order;
+    if (s->refcount_order < 6) {
+        s->refcount_max = (UINT64_C(1) << s->refcount_bits) - 1;
+    } else {
+        /* The above shift would overflow with s->refcount_bits == 64;
+         * furthermore, we do not want to use UINT64_MAX because refcounts will
+         * be passed around in int64_ts (negative values for -errno) */
+        s->refcount_max = INT64_MAX;
+    }
 
     if (header.crypt_method > QCOW_CRYPT_AES) {
         error_setg(errp, "Unsupported encryption method: %" PRIu32,
