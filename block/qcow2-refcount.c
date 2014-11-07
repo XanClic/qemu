@@ -32,6 +32,11 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
                             int64_t offset, int64_t length, uint64_t addend,
                             bool decrease, enum qcow2_discard_type type);
 
+static uint64_t get_refcount_ro4(const void *refcount_array, uint64_t index);
+
+static void set_refcount_ro4(void *refcount_array, uint64_t index,
+                             uint64_t value);
+
 
 /*********************************************************/
 /* refcount handling */
@@ -41,6 +46,9 @@ int qcow2_refcount_init(BlockDriverState *bs)
     BDRVQcowState *s = bs->opaque;
     unsigned int refcount_table_size2, i;
     int ret;
+
+    s->get_refcount = &get_refcount_ro4;
+    s->set_refcount = &set_refcount_ro4;
 
     assert(s->refcount_table_size <= INT_MAX / sizeof(uint64_t));
     refcount_table_size2 = s->refcount_table_size * sizeof(uint64_t);
@@ -72,6 +80,19 @@ void qcow2_refcount_close(BlockDriverState *bs)
 }
 
 
+static uint64_t get_refcount_ro4(const void *refcount_array, uint64_t index)
+{
+    return be16_to_cpu(((const uint16_t *)refcount_array)[index]);
+}
+
+static void set_refcount_ro4(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    assert(!(value >> 16));
+    ((uint16_t *)refcount_array)[index] = cpu_to_be16(value);
+}
+
+
 static int load_refcount_block(BlockDriverState *bs,
                                int64_t refcount_block_offset,
                                void **refcount_block)
@@ -97,7 +118,7 @@ int qcow2_get_refcount(BlockDriverState *bs, int64_t cluster_index,
     uint64_t refcount_table_index, block_index;
     int64_t refcount_block_offset;
     int ret;
-    uint16_t *refcount_block;
+    void *refcount_block;
 
     refcount_table_index = cluster_index >> s->refcount_block_bits;
     if (refcount_table_index >= s->refcount_table_size) {
@@ -119,16 +140,15 @@ int qcow2_get_refcount(BlockDriverState *bs, int64_t cluster_index,
     }
 
     ret = qcow2_cache_get(bs, s->refcount_block_cache, refcount_block_offset,
-        (void**) &refcount_block);
+                          &refcount_block);
     if (ret < 0) {
         return ret;
     }
 
     block_index = cluster_index & (s->refcount_block_size - 1);
-    *refcount = be16_to_cpu(refcount_block[block_index]);
+    *refcount = s->get_refcount(refcount_block, block_index);
 
-    ret = qcow2_cache_put(bs, s->refcount_block_cache,
-        (void**) &refcount_block);
+    ret = qcow2_cache_put(bs, s->refcount_block_cache, &refcount_block);
     if (ret < 0) {
         return ret;
     }
@@ -172,7 +192,7 @@ static int in_same_refcount_block(BDRVQcowState *s, uint64_t offset_a,
  * Returns 0 on success or -errno in error case
  */
 static int alloc_refcount_block(BlockDriverState *bs,
-    int64_t cluster_index, uint16_t **refcount_block)
+                                int64_t cluster_index, void **refcount_block)
 {
     BDRVQcowState *s = bs->opaque;
     unsigned int refcount_table_index;
@@ -199,7 +219,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
             }
 
              return load_refcount_block(bs, refcount_block_offset,
-                 (void**) refcount_block);
+                                        refcount_block);
         }
     }
 
@@ -259,7 +279,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
         /* The block describes itself, need to update the cache */
         int block_index = (new_block >> s->cluster_bits) &
             (s->refcount_block_size - 1);
-        (*refcount_block)[block_index] = cpu_to_be16(1);
+        s->set_refcount(*refcount_block, block_index, 1);
     } else {
         /* Described somewhere else. This can recurse at most twice before we
          * arrive at a block that describes itself. */
@@ -277,7 +297,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
         /* Initialize the new refcount block only after updating its refcount,
          * update_refcount uses the refcount cache itself */
         ret = qcow2_cache_get_empty(bs, s->refcount_block_cache, new_block,
-            (void**) refcount_block);
+                                    refcount_block);
         if (ret < 0) {
             goto fail_block;
         }
@@ -311,7 +331,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
         return -EAGAIN;
     }
 
-    ret = qcow2_cache_put(bs, s->refcount_block_cache, (void**) refcount_block);
+    ret = qcow2_cache_put(bs, s->refcount_block_cache, refcount_block);
     if (ret < 0) {
         goto fail_block;
     }
@@ -365,7 +385,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
         s->cluster_size;
     uint64_t table_offset = meta_offset + blocks_clusters * s->cluster_size;
     uint64_t *new_table = g_try_new0(uint64_t, table_size);
-    uint16_t *new_blocks = g_try_malloc0(blocks_clusters * s->cluster_size);
+    void *new_blocks = g_try_malloc0_n(blocks_clusters, s->cluster_size);
 
     assert(table_size > 0 && blocks_clusters > 0);
     if (new_table == NULL || new_blocks == NULL) {
@@ -387,7 +407,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
     uint64_t table_clusters = size_to_clusters(s, table_size * sizeof(uint64_t));
     int block = 0;
     for (i = 0; i < table_clusters + blocks_clusters; i++) {
-        new_blocks[block++] = cpu_to_be16(1);
+        s->set_refcount(new_blocks, block++, 1);
     }
 
     /* Write refcount blocks to disk */
@@ -440,7 +460,7 @@ static int alloc_refcount_block(BlockDriverState *bs,
     qcow2_free_clusters(bs, old_table_offset, old_table_size * sizeof(uint64_t),
                         QCOW2_DISCARD_OTHER);
 
-    ret = load_refcount_block(bs, new_block, (void**) refcount_block);
+    ret = load_refcount_block(bs, new_block, refcount_block);
     if (ret < 0) {
         return ret;
     }
@@ -455,7 +475,7 @@ fail_table:
     g_free(new_table);
 fail_block:
     if (*refcount_block != NULL) {
-        qcow2_cache_put(bs, s->refcount_block_cache, (void**) refcount_block);
+        qcow2_cache_put(bs, s->refcount_block_cache, refcount_block);
     }
     return ret;
 }
@@ -543,7 +563,7 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
 {
     BDRVQcowState *s = bs->opaque;
     int64_t start, last, cluster_offset;
-    uint16_t *refcount_block = NULL;
+    void *refcount_block = NULL;
     int64_t old_table_index = -1;
     int ret;
 
@@ -595,7 +615,7 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
         /* we can update the count and save it */
         block_index = cluster_index & (s->refcount_block_size - 1);
 
-        refcount = be16_to_cpu(refcount_block[block_index]);
+        refcount = s->get_refcount(refcount_block, block_index);
         if (refcount + addend > s->refcount_max ||
             (!decrease && refcount + addend < refcount) ||
             ( decrease && refcount + addend > refcount))
@@ -607,7 +627,7 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
         if (refcount == 0 && cluster_index < s->free_cluster_index) {
             s->free_cluster_index = cluster_index;
         }
-        refcount_block[block_index] = cpu_to_be16(refcount);
+        s->set_refcount(refcount_block, block_index, refcount);
 
         if (refcount == 0 && s->discard_passthrough[type]) {
             update_refcount_discard(bs, cluster_offset, s->cluster_size);
@@ -623,8 +643,7 @@ fail:
     /* Write last changed block to disk */
     if (refcount_block) {
         int wret;
-        wret = qcow2_cache_put(bs, s->refcount_block_cache,
-            (void**) &refcount_block);
+        wret = qcow2_cache_put(bs, s->refcount_block_cache, &refcount_block);
         if (wret < 0) {
             return ret < 0 ? ret : wret;
         }
@@ -1162,7 +1181,7 @@ static size_t refcount_array_byte_size(BDRVQcowState *s, uint64_t entries)
  * will be aligned to a cluster boundary, and the newly allocated area will be
  * zeroed.
  */
-static int realloc_refcount_array(BDRVQcowState *s, uint16_t **array,
+static int realloc_refcount_array(BDRVQcowState *s, void **array,
                                   int64_t *size, int64_t new_size)
 {
     /* Round to clusters so the array can be directly written to disk */
@@ -1170,7 +1189,7 @@ static int realloc_refcount_array(BDRVQcowState *s, uint16_t **array,
                                     s->cluster_size);
     size_t new_byte_size = ROUND_UP(refcount_array_byte_size(s, new_size),
                                     s->cluster_size);
-    uint16_t *new_ptr;
+    void *new_ptr;
 
     if (new_byte_size == old_byte_size) {
         *size = new_size;
@@ -1204,12 +1223,12 @@ static int realloc_refcount_array(BDRVQcowState *s, uint16_t **array,
  */
 static int inc_refcounts(BlockDriverState *bs,
                          BdrvCheckResult *res,
-                         uint16_t **refcount_table,
+                         void **refcount_table,
                          int64_t *refcount_table_size,
                          int64_t offset, int64_t size)
 {
     BDRVQcowState *s = bs->opaque;
-    uint64_t start, last, cluster_offset, k;
+    uint64_t start, last, cluster_offset, k, refcount;
     int ret;
 
     if (size <= 0) {
@@ -1230,11 +1249,14 @@ static int inc_refcounts(BlockDriverState *bs,
             }
         }
 
-        if (++(*refcount_table)[k] == 0) {
+        refcount = s->get_refcount(*refcount_table, k);
+        if (refcount == s->refcount_max) {
             fprintf(stderr, "ERROR: overflow cluster offset=0x%" PRIx64
                     "\n", cluster_offset);
             res->corruptions++;
+            continue;
         }
+        s->set_refcount(*refcount_table, k, refcount + 1);
     }
 
     return 0;
@@ -1254,8 +1276,9 @@ enum {
  * error occurred.
  */
 static int check_refcounts_l2(BlockDriverState *bs, BdrvCheckResult *res,
-    uint16_t **refcount_table, int64_t *refcount_table_size, int64_t l2_offset,
-    int flags)
+                              void **refcount_table,
+                              int64_t *refcount_table_size, int64_t l2_offset,
+                              int flags)
 {
     BDRVQcowState *s = bs->opaque;
     uint64_t *l2_table, l2_entry;
@@ -1372,7 +1395,7 @@ fail:
  */
 static int check_refcounts_l1(BlockDriverState *bs,
                               BdrvCheckResult *res,
-                              uint16_t **refcount_table,
+                              void **refcount_table,
                               int64_t *refcount_table_size,
                               int64_t l1_table_offset, int l1_size,
                               int flags)
@@ -1571,7 +1594,7 @@ fail:
  */
 static int check_refblocks(BlockDriverState *bs, BdrvCheckResult *res,
                            BdrvCheckMode fix, bool *rebuild,
-                           uint16_t **refcount_table, int64_t *nb_clusters)
+                           void **refcount_table, int64_t *nb_clusters)
 {
     BDRVQcowState *s = bs->opaque;
     int64_t i, size;
@@ -1656,9 +1679,10 @@ resize_fail:
             if (ret < 0) {
                 return ret;
             }
-            if ((*refcount_table)[cluster] != 1) {
+            if (s->get_refcount(*refcount_table, cluster) != 1) {
                 fprintf(stderr, "ERROR refcount block %" PRId64
-                        " refcount=%d\n", i, (*refcount_table)[cluster]);
+                        " refcount=%" PRIu64 "\n", i,
+                        s->get_refcount(*refcount_table, cluster));
                 res->corruptions++;
                 *rebuild = true;
             }
@@ -1673,7 +1697,7 @@ resize_fail:
  */
 static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
                                BdrvCheckMode fix, bool *rebuild,
-                               uint16_t **refcount_table, int64_t *nb_clusters)
+                               void **refcount_table, int64_t *nb_clusters)
 {
     BDRVQcowState *s = bs->opaque;
     int64_t i;
@@ -1737,7 +1761,7 @@ static int calculate_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
 static void compare_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
                               BdrvCheckMode fix, bool *rebuild,
                               int64_t *highest_cluster,
-                              uint16_t *refcount_table, int64_t nb_clusters)
+                              void *refcount_table, int64_t nb_clusters)
 {
     BDRVQcowState *s = bs->opaque;
     int64_t i;
@@ -1753,7 +1777,7 @@ static void compare_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
             continue;
         }
 
-        refcount2 = refcount_table[i];
+        refcount2 = s->get_refcount(refcount_table, i);
 
         if (refcount1 > 0 || refcount2 > 0) {
             *highest_cluster = i;
@@ -1812,7 +1836,7 @@ static void compare_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
  */
 static int64_t alloc_clusters_imrt(BlockDriverState *bs,
                                    int cluster_count,
-                                   uint16_t **refcount_table,
+                                   void **refcount_table,
                                    int64_t *imrt_nb_clusters,
                                    int64_t *first_free_cluster)
 {
@@ -1829,7 +1853,7 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
          contiguous_free_clusters < cluster_count;
          cluster++)
     {
-        if (!(*refcount_table)[cluster]) {
+        if (!s->get_refcount(*refcount_table, cluster)) {
             contiguous_free_clusters++;
             if (first_gap) {
                 /* If this is the first free cluster found, update
@@ -1867,7 +1891,7 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
     /* Go back to the first free cluster */
     cluster -= contiguous_free_clusters;
     for (i = 0; i < cluster_count; i++) {
-        (*refcount_table)[cluster + i] = 1;
+        s->set_refcount(*refcount_table, cluster + i, 1);
     }
 
     return cluster << s->cluster_bits;
@@ -1883,7 +1907,7 @@ static int64_t alloc_clusters_imrt(BlockDriverState *bs,
  */
 static int rebuild_refcount_structure(BlockDriverState *bs,
                                       BdrvCheckResult *res,
-                                      uint16_t **refcount_table,
+                                      void **refcount_table,
                                       int64_t *nb_clusters)
 {
     BDRVQcowState *s = bs->opaque;
@@ -1891,8 +1915,8 @@ static int rebuild_refcount_structure(BlockDriverState *bs,
     int64_t refblock_offset, refblock_start, refblock_index;
     uint32_t reftable_size = 0;
     uint64_t *on_disk_reftable = NULL;
-    uint16_t *on_disk_refblock;
-    int i, ret = 0;
+    void *on_disk_refblock;
+    int ret = 0;
     struct {
         uint64_t reftable_offset;
         uint32_t reftable_clusters;
@@ -1902,7 +1926,7 @@ static int rebuild_refcount_structure(BlockDriverState *bs,
 
 write_refblocks:
     for (; cluster < *nb_clusters; cluster++) {
-        if (!(*refcount_table)[cluster]) {
+        if (!s->get_refcount(*refcount_table, cluster)) {
             continue;
         }
 
@@ -1975,17 +1999,13 @@ write_refblocks:
             goto fail;
         }
 
-        on_disk_refblock = qemu_blockalign0(bs->file, s->cluster_size);
-        for (i = 0; i < s->refcount_block_size &&
-                    refblock_start + i < *nb_clusters; i++)
-        {
-            on_disk_refblock[i] =
-                cpu_to_be16((*refcount_table)[refblock_start + i]);
-        }
+        /* The size of *refcount_table is always cluster-aligned, therefore the
+         * write operation will not overflow */
+        on_disk_refblock = (void *)((uintptr_t)*refcount_table +
+                                    (refblock_index << s->refcount_block_bits));
 
         ret = bdrv_write(bs->file, refblock_offset / BDRV_SECTOR_SIZE,
-                         (void *)on_disk_refblock, s->cluster_sectors);
-        qemu_vfree(on_disk_refblock);
+                         on_disk_refblock, s->cluster_sectors);
         if (ret < 0) {
             fprintf(stderr, "ERROR writing refblock: %s\n", strerror(-ret));
             goto fail;
@@ -2080,7 +2100,7 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
     BDRVQcowState *s = bs->opaque;
     BdrvCheckResult pre_compare_res;
     int64_t size, highest_cluster, nb_clusters;
-    uint16_t *refcount_table = NULL;
+    void *refcount_table = NULL;
     bool rebuild = false;
     int ret;
 
@@ -2129,7 +2149,7 @@ int qcow2_check_refcounts(BlockDriverState *bs, BdrvCheckResult *res,
         /* Because the old reftable has been exchanged for a new one the
          * references have to be recalculated */
         rebuild = false;
-        memset(refcount_table, 0, nb_clusters * sizeof(uint16_t));
+        memset(refcount_table, 0, refcount_array_byte_size(s, nb_clusters));
         ret = calculate_refcounts(bs, res, 0, &rebuild, &refcount_table,
                                   &nb_clusters);
         if (ret < 0) {
