@@ -41,6 +41,7 @@ vm state offset: 512 MiB
 Format specific information:
     compat: 1.1
     lazy refcounts: false
+    refcount width: 16
     corrupt: false
 format name: IMGFMT
 cluster size: 64 KiB
@@ -48,5 +49,6 @@ vm state offset: 512 MiB
 Format specific information:
     compat: 1.1
     lazy refcounts: false
+    refcount width: 16
     corrupt: false
 *** done
