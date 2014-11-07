@@ -32,10 +32,73 @@ static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
                             int64_t offset, int64_t length,
                             int addend, enum qcow2_discard_type type);
 
+static uint64_t get_refcount_ro0(const void *refcount_array, uint64_t index);
+static uint64_t get_refcount_ro1(const void *refcount_array, uint64_t index);
+static uint64_t get_refcount_ro2(const void *refcount_array, uint64_t index);
+static uint64_t get_refcount_ro3(const void *refcount_array, uint64_t index);
 static uint64_t get_refcount_ro4(const void *refcount_array, uint64_t index);
+static uint64_t get_refcount_ro5(const void *refcount_array, uint64_t index);
+static uint64_t get_refcount_ro6(const void *refcount_array, uint64_t index);
 
+static void set_refcount_ro0(void *refcount_array, uint64_t index,
+                             uint64_t value);
+static void set_refcount_ro1(void *refcount_array, uint64_t index,
+                             uint64_t value);
+static void set_refcount_ro2(void *refcount_array, uint64_t index,
+                             uint64_t value);
+static void set_refcount_ro3(void *refcount_array, uint64_t index,
+                             uint64_t value);
 static void set_refcount_ro4(void *refcount_array, uint64_t index,
                              uint64_t value);
+static void set_refcount_ro5(void *refcount_array, uint64_t index,
+                             uint64_t value);
+static void set_refcount_ro6(void *refcount_array, uint64_t index,
+                             uint64_t value);
+
+static void get_refcount_functions(int refcount_order,
+                                   Qcow2GetRefcountFunc **get,
+                                   Qcow2SetRefcountFunc **set)
+{
+    switch (refcount_order) {
+        case 0:
+            *get = &get_refcount_ro0;
+            *set = &set_refcount_ro0;
+            break;
+
+        case 1:
+            *get = &get_refcount_ro1;
+            *set = &set_refcount_ro1;
+            break;
+
+        case 2:
+            *get = &get_refcount_ro2;
+            *set = &set_refcount_ro2;
+            break;
+
+        case 3:
+            *get = &get_refcount_ro3;
+            *set = &set_refcount_ro3;
+            break;
+
+        case 4:
+            *get = &get_refcount_ro4;
+            *set = &set_refcount_ro4;
+            break;
+
+        case 5:
+            *get = &get_refcount_ro5;
+            *set = &set_refcount_ro5;
+            break;
+
+        case 6:
+            *get = &get_refcount_ro6;
+            *set = &set_refcount_ro6;
+            break;
+
+        default:
+            abort();
+    }
+}
 
 
 /*********************************************************/
@@ -47,8 +110,8 @@ int qcow2_refcount_init(BlockDriverState *bs)
     unsigned int refcount_table_size2, i;
     int ret;
 
-    s->get_refcount = &get_refcount_ro4;
-    s->set_refcount = &set_refcount_ro4;
+    get_refcount_functions(s->refcount_order,
+                           &s->get_refcount, &s->set_refcount);
 
     assert(s->refcount_table_size <= INT_MAX / sizeof(uint64_t));
     refcount_table_size2 = s->refcount_table_size * sizeof(uint64_t);
@@ -80,6 +143,59 @@ void qcow2_refcount_close(BlockDriverState *bs)
 }
 
 
+static uint64_t get_refcount_ro0(const void *refcount_array, uint64_t index)
+{
+    return (((const uint8_t *)refcount_array)[index / 8] >> (index % 8)) & 0x1;
+}
+
+static void set_refcount_ro0(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    assert(!(value >> 1));
+    ((uint8_t *)refcount_array)[index / 8] &= ~(0x1 << (index % 8));
+    ((uint8_t *)refcount_array)[index / 8] |= value << (index % 8);
+}
+
+static uint64_t get_refcount_ro1(const void *refcount_array, uint64_t index)
+{
+    return (((const uint8_t *)refcount_array)[index / 4] >> (2 * (index % 4)))
+           & 0x3;
+}
+
+static void set_refcount_ro1(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    assert(!(value >> 2));
+    ((uint8_t *)refcount_array)[index / 4] &= ~(0x3 << (2 * (index % 4)));
+    ((uint8_t *)refcount_array)[index / 4] |= value << (2 * (index % 4));
+}
+
+static uint64_t get_refcount_ro2(const void *refcount_array, uint64_t index)
+{
+    return (((const uint8_t *)refcount_array)[index / 2] >> (4 * (index % 2)))
+           & 0xf;
+}
+
+static void set_refcount_ro2(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    assert(!(value >> 4));
+    ((uint8_t *)refcount_array)[index / 2] &= ~(0xf << (4 * (index % 2)));
+    ((uint8_t *)refcount_array)[index / 2] |= value << (4 * (index % 2));
+}
+
+static uint64_t get_refcount_ro3(const void *refcount_array, uint64_t index)
+{
+    return ((const uint8_t *)refcount_array)[index];
+}
+
+static void set_refcount_ro3(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    assert(!(value >> 8));
+    ((uint8_t *)refcount_array)[index] = value;
+}
+
 static uint64_t get_refcount_ro4(const void *refcount_array, uint64_t index)
 {
     return be16_to_cpu(((const uint16_t *)refcount_array)[index]);
@@ -90,6 +206,32 @@ static void set_refcount_ro4(void *refcount_array, uint64_t index,
 {
     assert(!(value >> 16));
     ((uint16_t *)refcount_array)[index] = cpu_to_be16(value);
+}
+
+static uint64_t get_refcount_ro5(const void *refcount_array, uint64_t index)
+{
+    return be32_to_cpu(((const uint32_t *)refcount_array)[index]);
+}
+
+static void set_refcount_ro5(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    assert(!(value >> 32));
+    ((uint32_t *)refcount_array)[index] = cpu_to_be32(value);
+}
+
+static uint64_t get_refcount_ro6(const void *refcount_array, uint64_t index)
+{
+    return be64_to_cpu(((const uint64_t *)refcount_array)[index]);
+}
+
+static void set_refcount_ro6(void *refcount_array, uint64_t index,
+                             uint64_t value)
+{
+    /* for 64 bit refcounts, refcount_max is INT64_MAX to prevent signed
+     * overflows (and to allow for -errno style return values) */
+    assert(!(value >> 63));
+    ((uint64_t *)refcount_array)[index] = cpu_to_be64(value);
 }
 
 
