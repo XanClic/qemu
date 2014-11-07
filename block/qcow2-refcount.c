@@ -761,7 +761,8 @@ int qcow2_alloc_clusters_at(BlockDriverState *bs, uint64_t offset,
 int64_t qcow2_alloc_bytes(BlockDriverState *bs, int size)
 {
     BDRVQcowState *s = bs->opaque;
-    int64_t offset, cluster_offset;
+    int64_t offset, cluster_offset, new_cluster;
+    int64_t ret;
     int free_in_cluster;
 
     BLKDBG_EVENT(bs->file, BLKDBG_CLUSTER_ALLOC_BYTES);
@@ -783,23 +784,32 @@ int64_t qcow2_alloc_bytes(BlockDriverState *bs, int size)
         free_in_cluster -= size;
         if (free_in_cluster == 0)
             s->free_byte_offset = 0;
-        if (offset_into_cluster(s, offset) != 0)
-            qcow2_update_cluster_refcount(bs, offset >> s->cluster_bits, 1,
-                                          QCOW2_DISCARD_NEVER);
+        if (offset_into_cluster(s, offset) != 0) {
+            ret = qcow2_update_cluster_refcount(bs, offset >> s->cluster_bits,
+                                                1, QCOW2_DISCARD_NEVER);
+            if (ret < 0) {
+                return ret;
+            }
+        }
     } else {
-        offset = qcow2_alloc_clusters(bs, s->cluster_size);
-        if (offset < 0) {
-            return offset;
+        new_cluster = qcow2_alloc_clusters(bs, s->cluster_size);
+        if (new_cluster < 0) {
+            return new_cluster;
         }
         cluster_offset = start_of_cluster(s, s->free_byte_offset);
-        if ((cluster_offset + s->cluster_size) == offset) {
+        if ((cluster_offset + s->cluster_size) == new_cluster) {
             /* we are lucky: contiguous data */
             offset = s->free_byte_offset;
-            qcow2_update_cluster_refcount(bs, offset >> s->cluster_bits, 1,
-                                          QCOW2_DISCARD_NEVER);
+            ret = qcow2_update_cluster_refcount(bs, offset >> s->cluster_bits,
+                                                1, QCOW2_DISCARD_NEVER);
+            if (ret < 0) {
+                qcow2_free_clusters(bs, new_cluster, s->cluster_size,
+                                    QCOW2_DISCARD_NEVER);
+                return ret;
+            }
             s->free_byte_offset += size;
         } else {
-            s->free_byte_offset = offset;
+            s->free_byte_offset = new_cluster;
             goto redo;
         }
     }
