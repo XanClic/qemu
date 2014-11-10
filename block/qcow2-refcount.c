@@ -761,12 +761,13 @@ int qcow2_alloc_clusters_at(BlockDriverState *bs, uint64_t offset,
 int64_t qcow2_alloc_bytes(BlockDriverState *bs, int size)
 {
     BDRVQcowState *s = bs->opaque;
-    int64_t offset, cluster_offset, new_cluster;
+    int64_t offset, cluster_offset, new_cluster, refcount;
     int64_t ret;
     int free_in_cluster;
 
     BLKDBG_EVENT(bs->file, BLKDBG_CLUSTER_ALLOC_BYTES);
     assert(size > 0 && size <= s->cluster_size);
+ redo:
     if (s->free_byte_offset == 0) {
         offset = qcow2_alloc_clusters(bs, s->cluster_size);
         if (offset < 0) {
@@ -774,12 +775,25 @@ int64_t qcow2_alloc_bytes(BlockDriverState *bs, int size)
         }
         s->free_byte_offset = offset;
     }
- redo:
+
     free_in_cluster = s->cluster_size -
         offset_into_cluster(s, s->free_byte_offset);
     if (size <= free_in_cluster) {
         /* enough space in current cluster */
         offset = s->free_byte_offset;
+
+        if (offset_into_cluster(s, offset) != 0) {
+            /* We will have to increase the refcount of this cluster; if the
+             * maximum has been reached already, this cluster cannot be used */
+            refcount = qcow2_get_refcount(bs, offset >> s->cluster_bits);
+            if (refcount < 0) {
+                return refcount;
+            } else if (refcount == s->refcount_max) {
+                s->free_byte_offset = 0;
+                goto redo;
+            }
+        }
+
         s->free_byte_offset += size;
         free_in_cluster -= size;
         if (free_in_cluster == 0)
@@ -800,6 +814,20 @@ int64_t qcow2_alloc_bytes(BlockDriverState *bs, int size)
         if ((cluster_offset + s->cluster_size) == new_cluster) {
             /* we are lucky: contiguous data */
             offset = s->free_byte_offset;
+
+            /* Same as above: In order to reuse the cluster, the refcount has to
+             * be increased; if that will not work, we are not so lucky after
+             * all */
+            refcount = qcow2_get_refcount(bs, offset >> s->cluster_bits);
+            if (refcount < 0) {
+                qcow2_free_clusters(bs, new_cluster, s->cluster_size,
+                                    QCOW2_DISCARD_NEVER);
+                return refcount;
+            } else if (refcount == s->refcount_max) {
+                s->free_byte_offset = offset;
+                goto redo;
+            }
+
             ret = qcow2_update_cluster_refcount(bs, offset >> s->cluster_bits,
                                                 1, QCOW2_DISCARD_NEVER);
             if (ret < 0) {
