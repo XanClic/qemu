@@ -2475,7 +2475,8 @@ static ImageInfoSpecific *qcow2_get_specific_info(BlockDriverState *bs)
     };
     if (s->qcow_version == 2) {
         *spec_info->qcow2 = (ImageInfoSpecificQCow2){
-            .compat = g_strdup("0.10"),
+            .compat             = g_strdup("0.10"),
+            .refcount_width     = s->refcount_bits,
         };
     } else if (s->qcow_version == 3) {
         *spec_info->qcow2 = (ImageInfoSpecificQCow2){
@@ -2486,6 +2487,7 @@ static ImageInfoSpecific *qcow2_get_specific_info(BlockDriverState *bs)
             .corrupt            = s->incompatible_features &
                                   QCOW2_INCOMPAT_CORRUPT,
             .has_corrupt        = true,
+            .refcount_width     = s->refcount_bits,
         };
     }
 
