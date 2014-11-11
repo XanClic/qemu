@@ -32,6 +32,7 @@ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,if=none,id=disk -device virti
                         "data": {
                             "compat": "1.1",
                             "lazy-refcounts": false,
+                            "refcount-width": 16,
                             "corrupt": false
                         }
                     },
@@ -202,6 +203,7 @@ Testing: -drive file=TEST_DIR/t.qcow2,format=qcow2,if=none,id=disk
                         "data": {
                             "compat": "1.1",
                             "lazy-refcounts": false,
+                            "refcount-width": 16,
                             "corrupt": false
                         }
                     },
@@ -402,6 +404,7 @@ Testing:
                         "data": {
                             "compat": "1.1",
                             "lazy-refcounts": false,
+                            "refcount-width": 16,
                             "corrupt": false
                         }
                     },
@@ -581,6 +584,7 @@ Testing:
                         "data": {
                             "compat": "1.1",
                             "lazy-refcounts": false,
+                            "refcount-width": 16,
                             "corrupt": false
                         }
                     },
@@ -686,6 +690,7 @@ Testing:
                         "data": {
                             "compat": "1.1",
                             "lazy-refcounts": false,
+                            "refcount-width": 16,
                             "corrupt": false
                         }
                     },
