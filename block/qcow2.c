@@ -2065,6 +2065,17 @@ static int qcow2_create(const char *filename, QemuOpts *opts, Error **errp)
         goto finish;
     }
 
+    refcount_width = qemu_opt_get_number_del(opts, BLOCK_OPT_REFCOUNT_WIDTH,
+                                             refcount_width);
+    if (refcount_width <= 0 || refcount_width > 64 ||
+        !is_power_of_2(refcount_width))
+    {
+        error_setg(errp, "Refcount width must be a power of two and may not "
+                   "exceed 64 bits");
+        ret = -EINVAL;
+        goto finish;
+    }
+
     if (version < 3 && refcount_width != 16) {
         error_setg(errp, "Different refcount widths than 16 bits require "
                    "compatibility level 1.1 or above (use compat=1.1 or "
@@ -2704,6 +2715,9 @@ static int qcow2_amend_options(BlockDriverState *bs, QemuOpts *opts,
         } else if (!strcmp(desc->name, "lazy_refcounts")) {
             lazy_refcounts = qemu_opt_get_bool(opts, "lazy_refcounts",
                                                lazy_refcounts);
+        } else if (!strcmp(desc->name, "refcount_width")) {
+            error_report("Cannot change refcount entry width");
+            return -ENOTSUP;
         } else {
             /* if this assertion fails, this probably means a new option was
              * added without having it covered here */
@@ -2872,6 +2886,12 @@ static QemuOptsList qcow2_create_opts = {
             .type = QEMU_OPT_BOOL,
             .help = "Postpone refcount updates",
             .def_value_str = "off"
+        },
+        {
+            .name = BLOCK_OPT_REFCOUNT_WIDTH,
+            .type = QEMU_OPT_NUMBER,
+            .help = "Width of a reference count entry in bits",
+            .def_value_str = "16"
         },
         { /* end of list */ }
     }
