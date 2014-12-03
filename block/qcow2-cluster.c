@@ -1699,7 +1699,7 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
                     /* For shared L2 tables, set the refcount accordingly (it is
                      * already 1 and needs to be l2_refcount) */
                     ret = qcow2_update_cluster_refcount(bs,
-                            offset >> s->cluster_bits, l2_refcount - 1,
+                            offset >> s->cluster_bits, l2_refcount - 1, false,
                             QCOW2_DISCARD_OTHER);
                     if (ret < 0) {
                         qcow2_free_clusters(bs, offset, s->cluster_size,
