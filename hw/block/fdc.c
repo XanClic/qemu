@@ -192,6 +192,9 @@ typedef struct FDrive {
     uint8_t ro;               /* Is read-only           */
     uint8_t media_changed;    /* Is media changed       */
     uint8_t media_rate;       /* Data rate of medium    */
+
+    bool media_inserted;      /* media_inserted && blk_is_inserted() == true iff
+                                 there a medium in the tray */
 } FDrive;
 
 static void fd_init(FDrive *drv)
@@ -202,6 +205,11 @@ static void fd_init(FDrive *drv)
     /* Disk */
     drv->last_sect = 0;
     drv->max_track = 0;
+}
+
+static bool medium_inserted(FDrive *drv)
+{
+    return drv->media_inserted && blk_is_inserted(drv->blk);
 }
 
 #define NUM_SIDES(drv) ((drv)->flags & FDISK_DBL_SIDES ? 2 : 1)
@@ -261,7 +269,7 @@ static int fd_seek(FDrive *drv, uint8_t head, uint8_t track, uint8_t sect,
 #endif
         drv->head = head;
         if (drv->track != track) {
-            if (drv->blk != NULL && blk_is_inserted(drv->blk)) {
+            if (medium_inserted(drv)) {
                 drv->media_changed = 0;
             }
             ret = 1;
@@ -270,7 +278,7 @@ static int fd_seek(FDrive *drv, uint8_t head, uint8_t track, uint8_t sect,
         drv->sect = sect;
     }
 
-    if (drv->blk == NULL || !blk_is_inserted(drv->blk)) {
+    if (!medium_inserted(drv)) {
         ret = 2;
     }
 
@@ -296,7 +304,7 @@ static void fd_revalidate(FDrive *drv)
         ro = blk_is_read_only(drv->blk);
         pick_geometry(drv->blk, &nb_heads, &max_track,
                       &last_sect, drv->drive, &drive, &rate);
-        if (!blk_is_inserted(drv->blk)) {
+        if (!medium_inserted(drv)) {
             FLOPPY_DPRINTF("No disk in drive\n");
         } else {
             FLOPPY_DPRINTF("Floppy disk (%d h %d t %d s) %s\n", nb_heads,
@@ -666,7 +674,7 @@ static bool fdrive_media_changed_needed(void *opaque)
 {
     FDrive *drive = opaque;
 
-    return (drive->blk != NULL && drive->media_changed != 1);
+    return (medium_inserted(drive) && drive->media_changed != 1);
 }
 
 static const VMStateDescription vmstate_fdrive_media_changed = {
@@ -2062,12 +2070,21 @@ static void fdctrl_change_cb(void *opaque, bool load)
 {
     FDrive *drive = opaque;
 
+    drive->media_inserted = load && drive->blk;
+
     drive->media_changed = 1;
     fd_revalidate(drive);
 }
 
+static bool fdctrl_is_tray_open(void *opaque)
+{
+    FDrive *drive = opaque;
+    return !medium_inserted(drive);
+}
+
 static const BlockDevOps fdctrl_block_ops = {
     .change_media_cb = fdctrl_change_cb,
+    .is_tray_open = fdctrl_is_tray_open,
 };
 
 /* Init functions */
@@ -2095,6 +2112,20 @@ static void fdctrl_connect_drives(FDCtrl *fdctrl, Error **errp)
         fdctrl_change_cb(drive, 0);
         if (drive->blk) {
             blk_set_dev_ops(drive->blk, &fdctrl_block_ops, drive);
+            /* It is safe to use blk_is_inserted() here. It might not be safe
+             * because when using host passthrough we might be starting with an
+             * empty host drive, which means that blk_is_inserted() would return
+             * false and media_inserted would be set to false. This would then
+             * mean that the guest tray would be treated as opened regardless of
+             * whether a medium has been inserted into the host drive.
+             * However, host passthrough for floppy disks cannot be used with
+             * the host drive being empty on startup (qemu will not be able to
+             * open the drive).
+             * Therefore, media_inserted is only kept false here if no host file
+             * (floppy drive or image file) has been specified at all. */
+            if (blk_is_inserted(drive->blk)) {
+                drive->media_inserted = true;
+            }
         }
     }
 }
