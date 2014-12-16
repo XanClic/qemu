@@ -3747,6 +3747,11 @@ BlockDriverState *bdrv_lookup_bs(const char *device,
         blk = blk_by_name(device);
 
         if (blk) {
+            if (!blk_bs(blk)) {
+                error_set(errp, QERR_DEVICE_HAS_NO_MEDIUM, device);
+                return NULL;
+            }
+
             return blk_bs(blk);
         }
     }
