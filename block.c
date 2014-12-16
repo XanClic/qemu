@@ -1001,7 +1001,6 @@ static int bdrv_open_common(BlockDriverState *bs, BlockDriverState *file,
     }
 
     bs->open_flags = flags;
-    bs->guest_block_size = 512;
     bs->request_alignment = 512;
     bs->zero_beyond_eof = true;
     open_flags = bdrv_open_flags(bs, flags);
@@ -2074,7 +2073,6 @@ static void bdrv_move_feature_fields(BlockDriverState *bs_dest,
     /* move some fields that need to stay attached to the device */
 
     /* dev info */
-    bs_dest->guest_block_size   = bs_src->guest_block_size;
     bs_dest->copy_on_read       = bs_src->copy_on_read;
 
     bs_dest->enable_write_cache = bs_src->enable_write_cache;
@@ -5344,11 +5342,6 @@ BlockAIOCB *bdrv_aio_ioctl(BlockDriverState *bs,
     if (drv && drv->bdrv_aio_ioctl)
         return drv->bdrv_aio_ioctl(bs, req, buf, cb, opaque);
     return NULL;
-}
-
-void bdrv_set_guest_block_size(BlockDriverState *bs, int align)
-{
-    bs->guest_block_size = align;
 }
 
 void *qemu_blockalign(BlockDriverState *bs, size_t size)
