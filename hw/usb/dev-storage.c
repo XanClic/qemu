@@ -638,7 +638,7 @@ static void usb_msd_realize_storage(USBDevice *dev, Error **errp)
     usb_msd_handle_reset(dev);
     s->scsi_dev = scsi_dev;
 
-    if (bdrv_key_required(blk_bs(blk))) {
+    if (blk_is_inserted(blk) && bdrv_key_required(blk_bs(blk))) {
         if (cur_mon) {
             monitor_read_bdrv_key_start(cur_mon, blk_bs(blk),
                                         usb_msd_password_cb, s);
