@@ -1988,7 +1988,7 @@ static bool bdrv_requests_pending(BlockDriverState *bs)
     return false;
 }
 
-static bool bdrv_drain_one(BlockDriverState *bs)
+bool bdrv_drain_one(BlockDriverState *bs)
 {
     bool bs_busy;
 

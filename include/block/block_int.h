@@ -449,6 +449,8 @@ BlockDriver *bdrv_probe_all(const uint8_t *buf, int buf_size,
 void bdrv_set_io_limits(BlockDriverState *bs,
                         ThrottleConfig *cfg);
 
+bool bdrv_drain_one(BlockDriverState *bs);
+
 
 /**
  * bdrv_add_before_write_notifier:
