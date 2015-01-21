@@ -23,6 +23,7 @@
 #include "migration/block.h"
 #include "migration/migration.h"
 #include "sysemu/blockdev.h"
+#include "sysemu/block-backend.h"
 #include <assert.h>
 
 #define BLOCK_SIZE                       (1 << 20)
@@ -348,6 +349,7 @@ static void unset_dirty_tracking(void)
 static void init_blk_migration(QEMUFile *f)
 {
     BlockDriverState *bs;
+    BlockBackend *blk = NULL;
     BlkMigDevState *bmds;
     int64_t sectors;
 
@@ -359,7 +361,9 @@ static void init_blk_migration(QEMUFile *f)
     block_mig_state.bulk_completed = 0;
     block_mig_state.zero_blocks = migrate_zero_blocks();
 
-    for (bs = bdrv_next(NULL); bs; bs = bdrv_next(bs)) {
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        bs = blk_bs(blk);
+
         if (bdrv_is_read_only(bs)) {
             continue;
         }
@@ -456,7 +460,7 @@ static int mig_save_device_dirty(QEMUFile *f, BlkMigDevState *bmds,
         blk_mig_lock();
         if (bmds_aio_inflight(bmds, sector)) {
             blk_mig_unlock();
-            bdrv_drain_all();
+            blk_drain_all();
         } else {
             blk_mig_unlock();
         }
@@ -596,7 +600,7 @@ static void blk_mig_cleanup(void)
     BlkMigDevState *bmds;
     BlkMigBlock *blk;
 
-    bdrv_drain_all();
+    blk_drain_all();
 
     unset_dirty_tracking();
 

@@ -14,6 +14,7 @@
 
 #include "hw/xen/xen_backend.h"
 #include "sysemu/blockdev.h"
+#include "sysemu/block-backend.h"
 #include "qemu/bitmap.h"
 
 #include <xen/hvm/params.h>
@@ -421,7 +422,7 @@ void xen_invalidate_map_cache(void)
     MapCacheRev *reventry;
 
     /* Flush pending AIO before destroying the mapcache */
-    bdrv_drain_all();
+    blk_drain_all();
 
     mapcache_lock();
 

@@ -1726,7 +1726,7 @@ int bdrv_reopen_multiple(BlockReopenQueue *bs_queue, Error **errp)
 
     assert(bs_queue != NULL);
 
-    bdrv_drain_all();
+    blk_drain_all();
 
     QSIMPLEQ_FOREACH(bs_entry, bs_queue, entry) {
         if (bdrv_reopen_prepare(&bs_entry->state, bs_queue, &local_err)) {
@@ -1895,9 +1895,9 @@ static void bdrv_close(BlockDriverState *bs)
 
     assert(!bs->job);
 
-    bdrv_drain_all(); /* complete I/O */
+    blk_drain_all(); /* complete I/O */
     bdrv_flush(bs);
-    bdrv_drain_all(); /* in case flush left pending I/O */
+    blk_drain_all(); /* in case flush left pending I/O */
 
     if (bs->drv) {
         if (bs->backing_hd) {
@@ -5769,7 +5769,7 @@ void bdrv_attach_aio_context(BlockDriverState *bs,
 
 void bdrv_set_aio_context(BlockDriverState *bs, AioContext *new_context)
 {
-    bdrv_drain_all(); /* ensure there are no in-flight requests */
+    blk_drain_all(); /* ensure there are no in-flight requests */
 
     bdrv_detach_aio_context(bs);
 
@@ -5872,14 +5872,14 @@ bool bdrv_recurse_is_first_non_filter(BlockDriverState *bs,
  */
 bool bdrv_is_first_non_filter(BlockDriverState *candidate)
 {
-    BlockDriverState *bs;
+    BlockBackend *blk = NULL;
 
     /* walk down the bs forest recursively */
-    QTAILQ_FOREACH(bs, &bdrv_states, device_list) {
+    while ((blk = blk_next_inserted(blk)) != NULL) {
         bool perm;
 
         /* try to recurse in this top level bs */
-        perm = bdrv_recurse_is_first_non_filter(bs, candidate);
+        perm = bdrv_recurse_is_first_non_filter(blk_bs(blk), candidate);
 
         /* candidate is the first non filter */
         if (perm) {

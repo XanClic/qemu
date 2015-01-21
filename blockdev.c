@@ -1116,7 +1116,7 @@ void hmp_commit(Monitor *mon, const QDict *qdict)
     int ret;
 
     if (!strcmp(device, "all")) {
-        ret = bdrv_commit_all();
+        ret = blk_commit_all();
     } else {
         bs = bdrv_find(device);
         if (!bs) {
@@ -1790,7 +1790,7 @@ void qmp_transaction(TransactionActionList *dev_list, Error **errp)
     QSIMPLEQ_INIT(&snap_bdrv_states);
 
     /* drain all i/o before any operations */
-    bdrv_drain_all();
+    blk_drain_all();
 
     /* We don't do anything in this loop that commits us to the operations */
     while (NULL != dev_entry) {
@@ -2296,7 +2296,7 @@ void qmp_block_resize(bool has_device, const char *device,
     }
 
     /* complete all in-flight operations before resizing the device */
-    bdrv_drain_all();
+    blk_drain_all();
 
     ret = bdrv_truncate(bs, size);
     switch (ret) {
@@ -2463,7 +2463,7 @@ void qmp_block_commit(const char *device,
     bs = blk_bs(blk);
 
     /* drain all i/o before commits */
-    bdrv_drain_all();
+    blk_drain_all();
 
     if (bdrv_op_is_blocked(bs, BLOCK_OP_TYPE_COMMIT_SOURCE, errp)) {
         goto out;
@@ -3199,12 +3199,14 @@ BlockJobInfoList *qmp_query_block_jobs(Error **errp)
 {
     BlockJobInfoList *head = NULL, **p_next = &head;
     BlockDriverState *bs;
+    BlockBackend *blk = NULL;
 
-    for (bs = bdrv_next(NULL); bs; bs = bdrv_next(bs)) {
-        AioContext *aio_context = bdrv_get_aio_context(bs);
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        AioContext *aio_context = blk_get_aio_context(blk);
 
         aio_context_acquire(aio_context);
 
+        bs = blk_bs(blk);
         if (bs->job) {
             BlockJobInfoList *elem = g_new0(BlockJobInfoList, 1);
             elem->value = block_job_query(bs->job);

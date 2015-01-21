@@ -30,6 +30,7 @@
 #include "net/net.h"
 #include "monitor/monitor.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/block-backend.h"
 #include "qemu/timer.h"
 #include "audio/audio.h"
 #include "migration/migration.h"
@@ -1054,10 +1055,10 @@ out:
 
 static BlockDriverState *find_vmstate_bs(void)
 {
-    BlockDriverState *bs = NULL;
-    while ((bs = bdrv_next(bs))) {
-        if (bdrv_can_snapshot(bs)) {
-            return bs;
+    BlockBackend *blk = NULL;
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        if (bdrv_can_snapshot(blk_bs(blk))) {
+            return blk_bs(blk);
         }
     }
     return NULL;
@@ -1069,11 +1070,13 @@ static BlockDriverState *find_vmstate_bs(void)
 static int del_existing_snapshots(Monitor *mon, const char *name)
 {
     BlockDriverState *bs;
+    BlockBackend *blk = NULL;
     QEMUSnapshotInfo sn1, *snapshot = &sn1;
     Error *err = NULL;
 
-    bs = NULL;
-    while ((bs = bdrv_next(bs))) {
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        bs = blk_bs(blk);
+
         if (bdrv_can_snapshot(bs) &&
             bdrv_snapshot_find(bs, snapshot, name) >= 0) {
             bdrv_snapshot_delete_by_id_or_name(bs, name, &err);
@@ -1095,6 +1098,7 @@ static int del_existing_snapshots(Monitor *mon, const char *name)
 void hmp_savevm(Monitor *mon, const QDict *qdict)
 {
     BlockDriverState *bs, *bs1;
+    BlockBackend *blk = NULL;
     QEMUSnapshotInfo sn1, *sn = &sn1, old_sn1, *old_sn = &old_sn1;
     int ret;
     QEMUFile *f;
@@ -1106,16 +1110,14 @@ void hmp_savevm(Monitor *mon, const QDict *qdict)
     Error *local_err = NULL;
 
     /* Verify if there is a device that doesn't support snapshots and is writable */
-    bs = NULL;
-    while ((bs = bdrv_next(bs))) {
-
-        if (!bdrv_is_inserted(bs) || bdrv_is_read_only(bs)) {
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        if (blk_is_read_only(blk)) {
             continue;
         }
 
-        if (!bdrv_can_snapshot(bs)) {
+        if (!bdrv_can_snapshot(blk_bs(blk))) {
             monitor_printf(mon, "Device '%s' is writable but does not support snapshots.\n",
-                               bdrv_get_device_name(bs));
+                           blk_name(blk));
             return;
         }
     }
@@ -1173,15 +1175,17 @@ void hmp_savevm(Monitor *mon, const QDict *qdict)
 
     /* create the snapshots */
 
-    bs1 = NULL;
-    while ((bs1 = bdrv_next(bs1))) {
+    blk = NULL;
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        bs1 = blk_bs(blk);
+
         if (bdrv_can_snapshot(bs1)) {
             /* Write VM state size only to the image that contains the state */
             sn->vm_state_size = (bs == bs1 ? vm_state_size : 0);
             ret = bdrv_snapshot_create(bs1, sn);
             if (ret < 0) {
                 monitor_printf(mon, "Error while creating snapshot on '%s'\n",
-                               bdrv_get_device_name(bs1));
+                               blk_name(blk));
             }
         }
     }
@@ -1220,6 +1224,7 @@ void qmp_xen_save_devices_state(const char *filename, Error **errp)
 
 int load_vmstate(const char *name)
 {
+    BlockBackend *blk;
     BlockDriverState *bs, *bs_vm_state;
     QEMUSnapshotInfo sn;
     QEMUFile *f;
@@ -1243,12 +1248,12 @@ int load_vmstate(const char *name)
 
     /* Verify if there is any device that doesn't support snapshots and is
     writable and check if the requested snapshot is available too. */
-    bs = NULL;
-    while ((bs = bdrv_next(bs))) {
-
-        if (!bdrv_is_inserted(bs) || bdrv_is_read_only(bs)) {
+    blk = NULL;
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        if (blk_is_read_only(blk)) {
             continue;
         }
+        bs = blk_bs(blk);
 
         if (!bdrv_can_snapshot(bs)) {
             error_report("Device '%s' is writable but does not support snapshots.",
@@ -1265,10 +1270,12 @@ int load_vmstate(const char *name)
     }
 
     /* Flush all IO requests so they don't interfere with the new state.  */
-    bdrv_drain_all();
+    blk_drain_all();
 
-    bs = NULL;
-    while ((bs = bdrv_next(bs))) {
+    blk = NULL;
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        bs = blk_bs(blk);
+
         if (bdrv_can_snapshot(bs)) {
             ret = bdrv_snapshot_goto(bs, name);
             if (ret < 0) {
@@ -1301,6 +1308,7 @@ int load_vmstate(const char *name)
 void hmp_delvm(Monitor *mon, const QDict *qdict)
 {
     BlockDriverState *bs;
+    BlockBackend *blk = NULL;
     Error *err;
     const char *name = qdict_get_str(qdict, "name");
 
@@ -1309,8 +1317,9 @@ void hmp_delvm(Monitor *mon, const QDict *qdict)
         return;
     }
 
-    bs = NULL;
-    while ((bs = bdrv_next(bs))) {
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        bs = blk_bs(blk);
+
         if (bdrv_can_snapshot(bs)) {
             err = NULL;
             bdrv_snapshot_delete_by_id_or_name(bs, name, &err);
@@ -1318,7 +1327,7 @@ void hmp_delvm(Monitor *mon, const QDict *qdict)
                 monitor_printf(mon,
                                "Error while deleting snapshot on device '%s':"
                                " %s\n",
-                               bdrv_get_device_name(bs),
+                               blk_name(blk),
                                error_get_pretty(err));
                 error_free(err);
             }
@@ -1329,6 +1338,7 @@ void hmp_delvm(Monitor *mon, const QDict *qdict)
 void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
 {
     BlockDriverState *bs, *bs1;
+    BlockBackend *blk;
     QEMUSnapshotInfo *sn_tab, *sn, s, *sn_info = &s;
     int nb_sns, i, ret, available;
     int total;
@@ -1356,9 +1366,11 @@ void hmp_info_snapshots(Monitor *mon, const QDict *qdict)
     for (i = 0; i < nb_sns; i++) {
         sn = &sn_tab[i];
         available = 1;
-        bs1 = NULL;
+        blk = NULL;
 
-        while ((bs1 = bdrv_next(bs1))) {
+        while ((blk = blk_next_inserted(blk)) != NULL) {
+            bs1 = blk_bs(blk);
+
             if (bdrv_can_snapshot(bs1) && bs1 != bs) {
                 ret = bdrv_snapshot_find(bs1, sn_info, sn->id_str);
                 if (ret < 0) {

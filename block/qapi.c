@@ -395,15 +395,24 @@ BlockStatsList *qmp_query_blockstats(bool has_query_nodes,
 {
     BlockStatsList *head = NULL, **p_next = &head;
     BlockDriverState *bs = NULL;
+    BlockBackend *blk = NULL;
 
     /* Just to be safe if query_nodes is not always initialized */
     query_nodes = has_query_nodes && query_nodes;
 
-    while ((bs = query_nodes ? bdrv_next_node(bs) : bdrv_next(bs))) {
+    while (query_nodes ? (bs = bdrv_next_node(bs)) != NULL
+                       : (blk = blk_next_inserted(blk)) != NULL)
+    {
         BlockStatsList *info = g_malloc0(sizeof(*info));
-        AioContext *ctx = bdrv_get_aio_context(bs);
+        AioContext *ctx = blk ? blk_get_aio_context(blk)
+                              : bdrv_get_aio_context(bs);
 
         aio_context_acquire(ctx);
+
+        if (blk) {
+            bs = blk_bs(blk);
+        }
+
         info->value = bdrv_query_stats(bs, !query_nodes);
         aio_context_release(ctx);
 

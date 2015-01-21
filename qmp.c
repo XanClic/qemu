@@ -162,8 +162,7 @@ SpiceInfo *qmp_query_spice(Error **errp)
 void qmp_cont(Error **errp)
 {
     Error *local_err = NULL;
-    BlockBackend *blk;
-    BlockDriverState *bs;
+    BlockBackend *blk = NULL;
 
     if (runstate_needs_reset()) {
         error_setg(errp, "Resetting the Virtual Machine is required");
@@ -172,11 +171,11 @@ void qmp_cont(Error **errp)
         return;
     }
 
-    for (blk = blk_next(NULL); blk; blk = blk_next(blk)) {
+    while ((blk = blk_next(blk)) != NULL) {
         blk_iostatus_reset(blk);
     }
-    for (bs = bdrv_next(NULL); bs; bs = bdrv_next(bs)) {
-        bdrv_add_key(bs, NULL, &local_err);
+    while ((blk = blk_next_inserted(blk)) != NULL) {
+        bdrv_add_key(blk_bs(blk), NULL, &local_err);
         if (local_err) {
             error_propagate(errp, local_err);
             return;

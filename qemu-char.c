@@ -24,6 +24,7 @@
 #include "qemu-common.h"
 #include "monitor/monitor.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/block-backend.h"
 #include "qemu/timer.h"
 #include "sysemu/char.h"
 #include "hw/usb.h"
@@ -523,7 +524,7 @@ static int mux_proc_byte(CharDriverState *chr, MuxDriver *d, int ch)
                  break;
             }
         case 's':
-            bdrv_commit_all();
+            blk_commit_all();
             break;
         case 'b':
             qemu_chr_be_event(chr, CHR_EVENT_BREAK);

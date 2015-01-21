@@ -471,7 +471,7 @@ int main(int argc, char **argv)
     /*
      * Make sure all outstanding requests complete before the program exits.
      */
-    bdrv_drain_all();
+    blk_drain_all();
 
     blk_unref(qemuio_blk);
     g_free(readline_state);

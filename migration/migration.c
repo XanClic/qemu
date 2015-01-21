@@ -19,7 +19,7 @@
 #include "monitor/monitor.h"
 #include "migration/qemu-file.h"
 #include "sysemu/sysemu.h"
-#include "block/block.h"
+#include "sysemu/block-backend.h"
 #include "qemu/sockets.h"
 #include "migration/block.h"
 #include "qemu/thread.h"
@@ -104,7 +104,7 @@ static void process_incoming_migration_co(void *opaque)
     qemu_announce_self();
 
     /* Make sure all file formats flush their mutable metadata */
-    bdrv_invalidate_cache_all(&local_err);
+    blk_invalidate_cache_all(&local_err);
     if (local_err) {
         qerror_report_err(local_err);
         error_free(local_err);

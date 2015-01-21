@@ -28,6 +28,7 @@
 #include "monitor/monitor.h"
 #include "qapi/qmp/qerror.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/block-backend.h"
 #include "exec/gdbstub.h"
 #include "sysemu/dma.h"
 #include "sysemu/kvm.h"
@@ -607,8 +608,8 @@ static int do_vm_stop(RunState state)
         qapi_event_send_stop(&error_abort);
     }
 
-    bdrv_drain_all();
-    ret = bdrv_flush_all();
+    blk_drain_all();
+    ret = blk_flush_all();
 
     return ret;
 }
@@ -1310,7 +1311,7 @@ int vm_stop_force_state(RunState state)
         runstate_set(state);
         /* Make sure to return an error if the flush in a previous vm_stop()
          * failed. */
-        return bdrv_flush_all();
+        return blk_flush_all();
     }
 }
 
