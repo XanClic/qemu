@@ -2016,37 +2016,6 @@ void bdrv_drain(BlockDriverState *bs)
     }
 }
 
-/*
- * Wait for pending requests to complete across all BlockDriverStates
- *
- * This function does not flush data to disk, use bdrv_flush_all() for that
- * after calling this function.
- *
- * Note that completion of an asynchronous I/O operation can trigger any
- * number of other I/O operations on other devices---for example a coroutine
- * can be arbitrarily complex and a constant flow of I/O can come until the
- * coroutine is complete.  Because of this, it is not possible to have a
- * function to drain a single device's I/O queue.
- */
-void bdrv_drain_all(void)
-{
-    /* Always run first iteration so any pending completion BHs run */
-    bool busy = true;
-    BlockDriverState *bs;
-
-    while (busy) {
-        busy = false;
-
-        QTAILQ_FOREACH(bs, &bdrv_states, device_list) {
-            AioContext *aio_context = bdrv_get_aio_context(bs);
-
-            aio_context_acquire(aio_context);
-            busy |= bdrv_drain_one(bs);
-            aio_context_release(aio_context);
-        }
-    }
-}
-
 /* make a BlockDriverState anonymous by removing from bdrv_state and
  * graph_bdrv_state list.
    Also, NULL terminate the device_name to prevent double remove */
@@ -2344,26 +2313,6 @@ ro_cleanup:
     }
 
     return ret;
-}
-
-int bdrv_commit_all(void)
-{
-    BlockDriverState *bs;
-
-    QTAILQ_FOREACH(bs, &bdrv_states, device_list) {
-        AioContext *aio_context = bdrv_get_aio_context(bs);
-
-        aio_context_acquire(aio_context);
-        if (bs->drv && bs->backing_hd) {
-            int ret = bdrv_commit(bs);
-            if (ret < 0) {
-                aio_context_release(aio_context);
-                return ret;
-            }
-        }
-        aio_context_release(aio_context);
-    }
-    return 0;
 }
 
 /**
@@ -3840,14 +3789,6 @@ BlockDriverState *bdrv_next_node(BlockDriverState *bs)
     return QTAILQ_NEXT(bs, node_list);
 }
 
-BlockDriverState *bdrv_next(BlockDriverState *bs)
-{
-    if (!bs) {
-        return QTAILQ_FIRST(&bdrv_states);
-    }
-    return QTAILQ_NEXT(bs, device_list);
-}
-
 const char *bdrv_get_node_name(const BlockDriverState *bs)
 {
     return bs->node_name;
@@ -3862,26 +3803,6 @@ const char *bdrv_get_device_name(const BlockDriverState *bs)
 int bdrv_get_flags(BlockDriverState *bs)
 {
     return bs->open_flags;
-}
-
-int bdrv_flush_all(void)
-{
-    BlockDriverState *bs;
-    int result = 0;
-
-    QTAILQ_FOREACH(bs, &bdrv_states, device_list) {
-        AioContext *aio_context = bdrv_get_aio_context(bs);
-        int ret;
-
-        aio_context_acquire(aio_context);
-        ret = bdrv_flush(bs);
-        if (ret < 0 && !result) {
-            result = ret;
-        }
-        aio_context_release(aio_context);
-    }
-
-    return result;
 }
 
 int bdrv_has_zero_init_1(BlockDriverState *bs)
@@ -5040,24 +4961,6 @@ void bdrv_invalidate_cache(BlockDriverState *bs, Error **errp)
     if (ret < 0) {
         error_setg_errno(errp, -ret, "Could not refresh total sector count");
         return;
-    }
-}
-
-void bdrv_invalidate_cache_all(Error **errp)
-{
-    BlockDriverState *bs;
-    Error *local_err = NULL;
-
-    QTAILQ_FOREACH(bs, &bdrv_states, device_list) {
-        AioContext *aio_context = bdrv_get_aio_context(bs);
-
-        aio_context_acquire(aio_context);
-        bdrv_invalidate_cache(bs, &local_err);
-        aio_context_release(aio_context);
-        if (local_err) {
-            error_propagate(errp, local_err);
-            return;
-        }
     }
 }
 

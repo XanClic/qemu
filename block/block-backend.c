@@ -380,6 +380,9 @@ void blk_remove_bs(BlockBackend *blk)
     notifier_list_notify(&blk->remove_bs_notifiers, blk);
 
     blk_update_root_state(blk);
+    /* After this function, the BDS may longer be accessible to blk_*_all()
+     * functions */
+    blk_drain_all();
 
     bdrv_unref(blk->bs);
     blk->bs->blk = NULL;
@@ -871,16 +874,6 @@ int blk_flush(BlockBackend *blk)
     return bdrv_flush(blk->bs);
 }
 
-int blk_flush_all(void)
-{
-    return bdrv_flush_all();
-}
-
-void blk_drain_all(void)
-{
-    bdrv_drain_all();
-}
-
 void blk_set_on_error(BlockBackend *blk, BlockdevOnError on_read_error,
                       BlockdevOnError on_write_error)
 {
@@ -1263,12 +1256,99 @@ BlockBackendRootState *blk_get_root_state(BlockBackend *blk)
     return &blk->root_state;
 }
 
+/*
+ * Wait for pending requests to complete across all BlockBackends
+ *
+ * This function does not flush data to disk, use blk_flush_all() for that
+ * after calling this function.
+ *
+ * Note that completion of an asynchronous I/O operation can trigger any
+ * number of other I/O operations on other devices---for example a coroutine
+ * can be arbitrarily complex and a constant flow of I/O can come until the
+ * coroutine is complete.  Because of this, it is not possible to have a
+ * function to drain a single device's I/O queue.
+ */
+void blk_drain_all(void)
+{
+    /* Always run first iteration so any pending completion BHs run */
+    bool busy = true;
+    BlockBackend *blk;
+
+    while (busy) {
+        busy = false;
+
+        QTAILQ_FOREACH(blk, &blk_backends, link) {
+            AioContext *aio_context = blk_get_aio_context(blk);
+
+            if (!blk_is_inserted(blk)) {
+                continue;
+            }
+
+            aio_context_acquire(aio_context);
+            busy |= bdrv_drain_one(blk->bs);
+            aio_context_release(aio_context);
+        }
+    }
+}
+
 int blk_commit_all(void)
 {
-    return bdrv_commit_all();
+    BlockBackend *blk;
+
+    QTAILQ_FOREACH(blk, &blk_backends, link) {
+        AioContext *aio_context = blk_get_aio_context(blk);
+
+        aio_context_acquire(aio_context);
+        if (blk_is_available(blk) && blk->bs->drv && blk->bs->backing_hd) {
+            int ret = bdrv_commit(blk->bs);
+            if (ret < 0) {
+                aio_context_release(aio_context);
+                return ret;
+            }
+        }
+        aio_context_release(aio_context);
+    }
+    return 0;
+}
+
+int blk_flush_all(void)
+{
+    BlockBackend *blk;
+    int result = 0;
+
+    QTAILQ_FOREACH(blk, &blk_backends, link) {
+        AioContext *aio_context = blk_get_aio_context(blk);
+        int ret;
+
+        aio_context_acquire(aio_context);
+        if (blk_is_inserted(blk)) {
+            ret = blk_flush(blk);
+            if (ret < 0 && !result) {
+                result = ret;
+            }
+        }
+        aio_context_release(aio_context);
+    }
+
+    return result;
 }
 
 void blk_invalidate_cache_all(Error **errp)
 {
-    bdrv_invalidate_cache_all(errp);
+    BlockBackend *blk;
+    Error *local_err = NULL;
+
+    QTAILQ_FOREACH(blk, &blk_backends, link) {
+        AioContext *aio_context = blk_get_aio_context(blk);
+
+        aio_context_acquire(aio_context);
+        if (blk_is_inserted(blk)) {
+            blk_invalidate_cache(blk, &local_err);
+        }
+        aio_context_release(aio_context);
+        if (local_err) {
+            error_propagate(errp, local_err);
+            return;
+        }
+    }
 }

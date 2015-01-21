@@ -250,7 +250,6 @@ int64_t bdrv_get_allocated_file_size(BlockDriverState *bs);
 void bdrv_get_geometry(BlockDriverState *bs, uint64_t *nb_sectors_ptr);
 void bdrv_refresh_limits(BlockDriverState *bs, Error **errp);
 int bdrv_commit(BlockDriverState *bs);
-int bdrv_commit_all(void);
 int bdrv_change_backing_file(BlockDriverState *bs,
     const char *backing_file, const char *backing_fmt);
 void bdrv_register(BlockDriver *bdrv);
@@ -336,15 +335,12 @@ BlockAIOCB *bdrv_aio_ioctl(BlockDriverState *bs,
 
 /* Invalidate any cached metadata used by image formats */
 void bdrv_invalidate_cache(BlockDriverState *bs, Error **errp);
-void bdrv_invalidate_cache_all(Error **errp);
 
 /* Ensure contents are flushed to disk.  */
 int bdrv_flush(BlockDriverState *bs);
 int coroutine_fn bdrv_co_flush(BlockDriverState *bs);
-int bdrv_flush_all(void);
 void bdrv_close_all(void);
 void bdrv_drain(BlockDriverState *bs);
-void bdrv_drain_all(void);
 
 int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
 int bdrv_co_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors);
