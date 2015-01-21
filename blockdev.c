@@ -2224,11 +2224,7 @@ int hmp_drive_del(Monitor *mon, const QDict *qdict, QObject **ret_data)
     }
 
     /* quiesce block driver; prevent further io */
-    bdrv_drain_all();
-    if (bs) {
-        bdrv_flush(bs);
-        bdrv_close(bs);
-    }
+    blk_remove_bs(blk);
 
     /* if we have a device attached to this BlockDriverState
      * then we need to make the drive anonymous until the device
