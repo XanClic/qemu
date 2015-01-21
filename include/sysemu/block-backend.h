@@ -126,7 +126,9 @@ int blk_co_discard(BlockBackend *blk, int64_t sector_num, int nb_sectors);
 int blk_co_flush(BlockBackend *blk);
 int blk_flush(BlockBackend *blk);
 int blk_flush_all(void);
+int blk_commit_all(void);
 void blk_drain_all(void);
+void blk_invalidate_cache_all(Error **errp);
 void blk_set_on_error(BlockBackend *blk, BlockdevOnError on_read_error,
                       BlockdevOnError on_write_error);
 BlockdevOnError blk_get_on_error(BlockBackend *blk, bool is_read);

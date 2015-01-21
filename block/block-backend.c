@@ -1251,3 +1251,13 @@ BlockBackendRootState *blk_get_root_state(BlockBackend *blk)
 {
     return &blk->root_state;
 }
+
+int blk_commit_all(void)
+{
+    return bdrv_commit_all();
+}
+
+void blk_invalidate_cache_all(Error **errp)
+{
+    bdrv_invalidate_cache_all(errp);
+}
