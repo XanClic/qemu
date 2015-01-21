@@ -2097,6 +2097,8 @@ static void bdrv_move_feature_fields(BlockDriverState *bs_dest,
     bs_dest->device_list = bs_src->device_list;
     /* keep the same entry in all_bdrv_states */
     bs_dest->bs_list = bs_src->bs_list;
+    /* keep the same entry in the list of monitor-owned BDS */
+    bs_dest->monitor_list = bs_src->monitor_list;
 
     bs_dest->blk = bs_src->blk;
 

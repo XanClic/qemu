@@ -47,6 +47,9 @@
 #include "trace.h"
 #include "sysemu/arch_init.h"
 
+static QTAILQ_HEAD(, BlockDriverState) monitor_bdrv_states =
+    QTAILQ_HEAD_INITIALIZER(monitor_bdrv_states);
+
 static const char *const if_name[IF_COUNT] = {
     [IF_NONE] = "none",
     [IF_IDE] = "ide",
@@ -644,6 +647,19 @@ fail:
     qemu_opts_del(opts);
     QDECREF(bs_opts);
     return NULL;
+}
+
+void blockdev_close_all_bdrv_states(void)
+{
+    BlockDriverState *bs, *next_bs;
+
+    QTAILQ_FOREACH_SAFE(bs, &monitor_bdrv_states, monitor_list, next_bs) {
+        AioContext *ctx = bdrv_get_aio_context(bs);
+
+        aio_context_acquire(ctx);
+        bdrv_unref(bs);
+        aio_context_release(ctx);
+    }
 }
 
 static void qemu_opt_rename(QemuOpts *opts, const char *from, const char *to,
@@ -3161,6 +3177,8 @@ void qmp_blockdev_add(BlockdevOptions *options, Error **errp)
         if (!bs) {
             goto fail;
         }
+
+        QTAILQ_INSERT_TAIL(&monitor_bdrv_states, bs, monitor_list);
     }
 
     if (bs && bdrv_key_required(bs)) {

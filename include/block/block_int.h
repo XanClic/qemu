@@ -401,6 +401,8 @@ struct BlockDriverState {
     QTAILQ_ENTRY(BlockDriverState) device_list;
     /* element of the list of all BlockDriverStates (all_bdrv_states) */
     QTAILQ_ENTRY(BlockDriverState) bs_list;
+    /* element of the list of monitor-owned BDS */
+    QTAILQ_ENTRY(BlockDriverState) monitor_list;
     QLIST_HEAD(, BdrvDirtyBitmap) dirty_bitmaps;
     int refcnt;
 
@@ -623,5 +625,7 @@ void blk_dev_eject_request(BlockBackend *blk, bool force);
 bool blk_dev_is_tray_open(BlockBackend *blk);
 bool blk_dev_is_medium_locked(BlockBackend *blk);
 void blk_dev_resize_cb(BlockBackend *blk);
+
+void blockdev_close_all_bdrv_states(void);
 
 #endif /* BLOCK_INT_H */
