@@ -163,12 +163,7 @@ static void blk_delete(BlockBackend *blk)
 {
     assert(!blk->refcnt);
     assert(!blk->dev);
-    if (blk->bs) {
-        assert(blk->bs->blk == blk);
-        blk->bs->blk = NULL;
-        bdrv_unref(blk->bs);
-        blk->bs = NULL;
-    }
+    blk_remove_bs(blk);
     /* Avoid double-remove after blk_hide_on_behalf_of_hmp_drive_del() */
     if (blk->name[0]) {
         QTAILQ_REMOVE(&blk_backends, blk, link);
@@ -323,6 +318,8 @@ void blk_remove_bs(BlockBackend *blk)
     if (!blk->bs) {
         return;
     }
+
+    assert(blk->bs->blk == blk);
 
     notifier_list_notify(&blk->remove_bs_notifiers, blk);
 
