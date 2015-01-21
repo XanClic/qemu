@@ -28,6 +28,8 @@ struct BlockBackend {
     BlockDriverState *bs;
     DriveInfo *legacy_dinfo;    /* null unless created by drive_new() */
     QTAILQ_ENTRY(BlockBackend) link; /* for blk_backends */
+    QTAILQ_ENTRY(BlockBackend) monitor_link; /* for monitor_block_backends */
+    bool in_monitor_list;
 
     void *dev;                  /* attached device model, if any */
     /* TODO change to DeviceState when all users are qdevified */
@@ -68,6 +70,11 @@ static void drive_info_del(DriveInfo *dinfo);
 /* All the BlockBackends (except for hidden ones) */
 static QTAILQ_HEAD(, BlockBackend) blk_backends =
     QTAILQ_HEAD_INITIALIZER(blk_backends);
+
+/* All BlockBackends referenced by the monitor and which are iterated through by
+ * blk_next() */
+static QTAILQ_HEAD(, BlockBackend) monitor_block_backends =
+    QTAILQ_HEAD_INITIALIZER(monitor_block_backends);
 
 /*
  * Create a new BlockBackend with @name, with a reference count of one.
@@ -232,7 +239,8 @@ void blk_remove_all_bs(void)
  */
 BlockBackend *blk_next(BlockBackend *blk)
 {
-    return blk ? QTAILQ_NEXT(blk, link) : QTAILQ_FIRST(&blk_backends);
+    return blk ? QTAILQ_NEXT(blk, monitor_link)
+               : QTAILQ_FIRST(&monitor_block_backends);
 }
 
 /*
@@ -248,6 +256,30 @@ BlockBackend *blk_next_inserted(BlockBackend *blk)
     }
 
     return blk;
+}
+
+/*
+ * Add a BlockBackend into the list of backends referenced by the monitor.
+ * Strictly for use by blockdev.c.
+ */
+void monitor_add_blk(BlockBackend *blk)
+{
+    if (!blk->in_monitor_list) {
+        QTAILQ_INSERT_TAIL(&monitor_block_backends, blk, monitor_link);
+        blk->in_monitor_list = true;
+    }
+}
+
+/*
+ * Remove a BlockBackend from the list of backends referenced by the monitor.
+ * Strictly for use by blockdev.c.
+ */
+void monitor_remove_blk(BlockBackend *blk)
+{
+    if (blk->in_monitor_list) {
+        QTAILQ_REMOVE(&monitor_block_backends, blk, monitor_link);
+        blk->in_monitor_list = false;
+    }
 }
 
 /*

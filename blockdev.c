@@ -143,6 +143,7 @@ void blockdev_auto_del(BlockBackend *blk)
     DriveInfo *dinfo = blk_legacy_dinfo(blk);
 
     if (dinfo && dinfo->auto_del) {
+        monitor_remove_blk(blk);
         blk_unref(blk);
     }
 }
@@ -582,6 +583,8 @@ static BlockBackend *blockdev_init(const char *file, QDict *bs_opts,
     }
 
     blk_set_on_error(blk, on_read_error, on_write_error);
+
+    monitor_add_blk(blk);
 
 err_no_bs_opts:
     qemu_opts_del(opts);
@@ -2241,6 +2244,7 @@ int hmp_drive_del(Monitor *mon, const QDict *qdict, QObject **ret_data)
 
     /* quiesce block driver; prevent further io */
     blk_remove_bs(blk);
+    monitor_remove_blk(blk);
 
     /* if we have a device attached to this BlockDriverState
      * then we need to make the drive anonymous until the device
