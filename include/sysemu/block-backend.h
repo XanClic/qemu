@@ -70,6 +70,7 @@ void blk_unref(BlockBackend *blk);
 void blk_remove_all_bs(void);
 const char *blk_name(BlockBackend *blk);
 BlockBackend *blk_by_name(const char *name);
+bool blk_name_taken(const char *name);
 BlockBackend *blk_next(BlockBackend *blk);
 
 BlockDriverState *blk_bs(BlockBackend *blk);

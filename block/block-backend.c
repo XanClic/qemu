@@ -85,7 +85,7 @@ BlockBackend *blk_new(const char *name, Error **errp)
         error_setg(errp, "Invalid device name");
         return NULL;
     }
-    if (blk_by_name(name)) {
+    if (blk_name_taken(name)) {
         error_setg(errp, "Device with id '%s' already exists", name);
         return NULL;
     }
@@ -260,6 +260,23 @@ BlockBackend *blk_by_name(const char *name)
         }
     }
     return NULL;
+}
+
+/*
+ * This function should be used to check whether a certain BlockBackend name is
+ * already taken; blk_by_name() will only search in the list of monitor-owned
+ * BlockBackends which is not necessarily complete.
+ */
+bool blk_name_taken(const char *name)
+{
+    BlockBackend *blk;
+
+    QTAILQ_FOREACH(blk, &blk_backends, link) {
+        if (!strcmp(name, blk->name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /*

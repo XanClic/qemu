@@ -935,8 +935,8 @@ static void bdrv_assign_node_name(BlockDriverState *bs,
         return;
     }
 
-    /* takes care of avoiding namespaces collisions */
-    if (blk_by_name(node_name)) {
+    /* takes care of avoiding namespace collisions */
+    if (blk_name_taken(node_name)) {
         error_setg(errp, "node-name=%s is conflicting with a device id",
                    node_name);
         return;
