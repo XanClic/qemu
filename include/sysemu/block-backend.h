@@ -72,6 +72,7 @@ const char *blk_name(BlockBackend *blk);
 BlockBackend *blk_by_name(const char *name);
 bool blk_name_taken(const char *name);
 BlockBackend *blk_next(BlockBackend *blk);
+BlockBackend *blk_next_inserted(BlockBackend *blk);
 
 BlockDriverState *blk_bs(BlockBackend *blk);
 void blk_remove_bs(BlockBackend *blk);

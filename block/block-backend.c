@@ -236,6 +236,21 @@ BlockBackend *blk_next(BlockBackend *blk)
 }
 
 /*
+ * Like blk_next(), but skips all non-inserted BlockBackends (that is,
+ * BlockBackends for which blk_is_inserted() returns false)
+ */
+BlockBackend *blk_next_inserted(BlockBackend *blk)
+{
+    while ((blk = blk_next(blk)) != NULL) {
+        if (blk_is_inserted(blk)) {
+            break;
+        }
+    }
+
+    return blk;
+}
+
+/*
  * Return @blk's name, a non-null string.
  * Wart: the name is empty iff @blk has been hidden with
  * blk_hide_on_behalf_of_hmp_drive_del().
