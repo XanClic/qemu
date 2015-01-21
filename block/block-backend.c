@@ -67,7 +67,7 @@ static const AIOCBInfo block_backend_aiocb_info = {
 
 static void drive_info_del(DriveInfo *dinfo);
 
-/* All the BlockBackends (except for hidden ones) */
+/* All the BlockBackends */
 static QTAILQ_HEAD(, BlockBackend) blk_backends =
     QTAILQ_HEAD_INITIALIZER(blk_backends);
 
@@ -171,10 +171,7 @@ static void blk_delete(BlockBackend *blk)
     assert(!blk->refcnt);
     assert(!blk->dev);
     blk_remove_bs(blk);
-    /* Avoid double-remove after blk_hide_on_behalf_of_hmp_drive_del() */
-    if (blk->name[0]) {
-        QTAILQ_REMOVE(&blk_backends, blk, link);
-    }
+    QTAILQ_REMOVE(&blk_backends, blk, link);
     g_free(blk->name);
     drive_info_del(blk->legacy_dinfo);
     g_free(blk);
@@ -367,24 +364,6 @@ BlockBackend *blk_by_legacy_dinfo(DriveInfo *dinfo)
         }
     }
     abort();
-}
-
-/*
- * Hide @blk.
- * @blk must not have been hidden already.
- * Make attached BlockDriverState, if any, anonymous.
- * Once hidden, @blk is invisible to all functions that don't receive
- * it as argument.  For example, blk_by_name() won't return it.
- * Strictly for use by do_drive_del().
- * TODO get rid of it!
- */
-void blk_hide_on_behalf_of_hmp_drive_del(BlockBackend *blk)
-{
-    QTAILQ_REMOVE(&blk_backends, blk, link);
-    blk->name[0] = 0;
-    if (blk->bs) {
-        bdrv_make_anon(blk->bs);
-    }
 }
 
 /*
