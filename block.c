@@ -88,9 +88,6 @@ static void coroutine_fn bdrv_co_do_rw(void *opaque);
 static int coroutine_fn bdrv_co_do_write_zeroes(BlockDriverState *bs,
     int64_t sector_num, int nb_sectors, BdrvRequestFlags flags);
 
-static QTAILQ_HEAD(, BlockDriverState) bdrv_states =
-    QTAILQ_HEAD_INITIALIZER(bdrv_states);
-
 static QTAILQ_HEAD(, BlockDriverState) graph_bdrv_states =
     QTAILQ_HEAD_INITIALIZER(graph_bdrv_states);
 
@@ -360,10 +357,7 @@ void bdrv_register(BlockDriver *bdrv)
 
 BlockDriverState *bdrv_new_root(void)
 {
-    BlockDriverState *bs = bdrv_new();
-
-    QTAILQ_INSERT_TAIL(&bdrv_states, bs, device_list);
-    return bs;
+    return bdrv_new();
 }
 
 BlockDriverState *bdrv_new(void)
@@ -2021,17 +2015,6 @@ void bdrv_drain(BlockDriverState *bs)
    Also, NULL terminate the device_name to prevent double remove */
 void bdrv_make_anon(BlockDriverState *bs)
 {
-    /*
-     * Take care to remove bs from bdrv_states only when it's actually
-     * in it.  Note that bs->device_list.tqe_prev is initially null,
-     * and gets set to non-null by QTAILQ_INSERT_TAIL().  Establish
-     * the useful invariant "bs in bdrv_states iff bs->tqe_prev" by
-     * resetting it to null on remove.
-     */
-    if (bs->device_list.tqe_prev) {
-        QTAILQ_REMOVE(&bdrv_states, bs, device_list);
-        bs->device_list.tqe_prev = NULL;
-    }
     if (bs->node_name[0] != '\0') {
         QTAILQ_REMOVE(&graph_bdrv_states, bs, node_list);
     }
@@ -2072,8 +2055,6 @@ static void bdrv_move_feature_fields(BlockDriverState *bs_dest,
     /* job */
     bs_dest->job                = bs_src->job;
 
-    /* keep the same entry in bdrv_states */
-    bs_dest->device_list = bs_src->device_list;
     /* keep the same entry in all_bdrv_states */
     bs_dest->bs_list = bs_src->bs_list;
     /* keep the same entry in the list of monitor-owned BDS */
