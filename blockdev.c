@@ -1562,27 +1562,27 @@ static void blockdev_backup_prepare(BlkTransactionState *common, Error **errp)
 {
     BlockdevBackupState *state = DO_UPCAST(BlockdevBackupState, common, common);
     BlockdevBackup *backup;
-    BlockDriverState *bs, *target;
+    BlockBackend *blk, *target;
     Error *local_err = NULL;
 
     assert(common->action->kind == TRANSACTION_ACTION_KIND_BLOCKDEV_BACKUP);
     backup = common->action->blockdev_backup;
 
-    bs = bdrv_find(backup->device);
-    if (!bs) {
+    blk = blk_by_name(backup->device);
+    if (!blk) {
         error_set(errp, QERR_DEVICE_NOT_FOUND, backup->device);
         return;
     }
 
-    target = bdrv_find(backup->target);
+    target = blk_by_name(backup->target);
     if (!target) {
         error_set(errp, QERR_DEVICE_NOT_FOUND, backup->target);
         return;
     }
 
     /* AioContext is released in .clean() */
-    state->aio_context = bdrv_get_aio_context(bs);
-    if (state->aio_context != bdrv_get_aio_context(target)) {
+    state->aio_context = blk_get_aio_context(blk);
+    if (state->aio_context != blk_get_aio_context(target)) {
         state->aio_context = NULL;
         error_setg(errp, "Backup between two IO threads is not implemented");
         return;
@@ -1600,7 +1600,10 @@ static void blockdev_backup_prepare(BlkTransactionState *common, Error **errp)
         return;
     }
 
-    state->bs = bs;
+    /* qmp_blockdev_backup() would have failed otherwise */
+    assert(blk_bs(blk));
+
+    state->bs = blk_bs(blk);
     state->job = state->bs->job;
 }
 
