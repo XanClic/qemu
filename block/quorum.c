@@ -1005,6 +1005,7 @@ static void quorum_close(BlockDriverState *bs)
 
     for (i = 0; i < s->num_children; i++) {
         bdrv_unref(s->bs[i]);
+        s->bs[i] = NULL;
     }
 
     g_free(s->bs);
@@ -1070,7 +1071,7 @@ static bool quorum_is_inserted(BlockDriverState *bs)
     int i;
 
     for (i = 0; i < s->num_children; i++) {
-        if (!bdrv_is_inserted(s->bs[i])) {
+        if (s->bs[i] && !bdrv_is_inserted(s->bs[i])) {
             return false;
         }
     }
