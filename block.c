@@ -5255,14 +5255,16 @@ int bdrv_discard(BlockDriverState *bs, int64_t sector_num, int nb_sectors)
 /**
  * Return TRUE if the media is present
  */
-int bdrv_is_inserted(BlockDriverState *bs)
+bool bdrv_is_inserted(BlockDriverState *bs)
 {
     BlockDriver *drv = bs->drv;
 
-    if (!drv)
-        return 0;
-    if (!drv->bdrv_is_inserted)
-        return 1;
+    if (!drv) {
+        return false;
+    }
+    if (!drv->bdrv_is_inserted) {
+        return true;
+    }
     return drv->bdrv_is_inserted(bs);
 }
 
