@@ -367,8 +367,6 @@ struct BlockDriverState {
     BlockDriverState *backing_hd;
     BlockDriverState *file;
 
-    NotifierList close_notifiers;
-
     /* Callback before write request is processed */
     NotifierWithReturnList before_write_notifiers;
 

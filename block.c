@@ -371,7 +371,6 @@ BlockDriverState *bdrv_new(void)
     for (i = 0; i < BLOCK_OP_TYPE_MAX; i++) {
         QLIST_INIT(&bs->op_blockers[i]);
     }
-    notifier_list_init(&bs->close_notifiers);
     notifier_with_return_list_init(&bs->before_write_notifiers);
     qemu_co_queue_init(&bs->throttled_reqs[0]);
     qemu_co_queue_init(&bs->throttled_reqs[1]);
@@ -379,11 +378,6 @@ BlockDriverState *bdrv_new(void)
     bs->aio_context = qemu_get_aio_context();
 
     return bs;
-}
-
-void bdrv_add_close_notifier(BlockDriverState *bs, Notifier *notify)
-{
-    notifier_list_add(&bs->close_notifiers, notify);
 }
 
 BlockDriver *bdrv_find_format(const char *format_name)
@@ -1898,7 +1892,6 @@ void bdrv_close(BlockDriverState *bs)
     bdrv_drain_all(); /* complete I/O */
     bdrv_flush(bs);
     bdrv_drain_all(); /* in case flush left pending I/O */
-    notifier_list_notify(&bs->close_notifiers, bs);
 
     if (bs->drv) {
         if (bs->backing_hd) {

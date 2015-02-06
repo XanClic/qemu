@@ -47,6 +47,8 @@ struct BlockBackend {
     BlockdevOnError on_read_error, on_write_error;
     bool iostatus_enabled;
     BlockDeviceIoStatus iostatus;
+
+    NotifierList remove_bs_notifiers, insert_bs_notifiers;
 };
 
 typedef struct BlockBackendAIOCB {
@@ -97,6 +99,8 @@ BlockBackend *blk_new(const char *name, Error **errp)
     blk = g_new0(BlockBackend, 1);
     blk->name = g_strdup(name);
     blk->refcnt = 1;
+    notifier_list_init(&blk->remove_bs_notifiers);
+    notifier_list_init(&blk->insert_bs_notifiers);
     QTAILQ_INSERT_TAIL(&blk_backends, blk, link);
     return blk;
 }
@@ -320,6 +324,8 @@ void blk_remove_bs(BlockBackend *blk)
         return;
     }
 
+    notifier_list_notify(&blk->remove_bs_notifiers, blk);
+
     blk_update_root_state(blk);
 
     bdrv_unref(blk->bs);
@@ -345,6 +351,8 @@ void blk_insert_bs(BlockBackend *blk, BlockDriverState *bs)
     }
 
     bs->blk = blk;
+
+    notifier_list_notify(&blk->insert_bs_notifiers, blk);
 }
 
 /*
@@ -1067,11 +1075,14 @@ void blk_remove_aio_context_notifier(BlockBackend *blk,
     }
 }
 
-void blk_add_close_notifier(BlockBackend *blk, Notifier *notify)
+void blk_add_remove_bs_notifier(BlockBackend *blk, Notifier *notify)
 {
-    if (blk->bs) {
-        bdrv_add_close_notifier(blk->bs, notify);
-    }
+    notifier_list_add(&blk->remove_bs_notifiers, notify);
+}
+
+void blk_add_insert_bs_notifier(BlockBackend *blk, Notifier *notify)
+{
+    notifier_list_add(&blk->insert_bs_notifiers, notify);
 }
 
 void blk_io_plug(BlockBackend *blk)
