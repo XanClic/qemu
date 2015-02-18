@@ -1626,7 +1626,8 @@ fail:
 static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
                                       int l1_size, int64_t *visited_l1_entries,
                                       int64_t l1_entries,
-                                      BlockDriverAmendStatusCB *status_cb)
+                                      BlockDriverAmendStatusCB *status_cb,
+                                      void *cb_opaque)
 {
     BDRVQcowState *s = bs->opaque;
     bool is_active_l1 = (l1_table == s->l1_table);
@@ -1652,7 +1653,7 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
             /* unallocated */
             (*visited_l1_entries)++;
             if (status_cb) {
-                status_cb(bs, *visited_l1_entries, l1_entries);
+                status_cb(bs, *visited_l1_entries, l1_entries, cb_opaque);
             }
             continue;
         }
@@ -1789,7 +1790,7 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
 
         (*visited_l1_entries)++;
         if (status_cb) {
-            status_cb(bs, *visited_l1_entries, l1_entries);
+            status_cb(bs, *visited_l1_entries, l1_entries, cb_opaque);
         }
     }
 
@@ -1813,7 +1814,8 @@ fail:
  * qcow2 version which doesn't yet support metadata zero clusters.
  */
 int qcow2_expand_zero_clusters(BlockDriverState *bs,
-                               BlockDriverAmendStatusCB *status_cb)
+                               BlockDriverAmendStatusCB *status_cb,
+                               void *cb_opaque)
 {
     BDRVQcowState *s = bs->opaque;
     uint64_t *l1_table = NULL;
@@ -1830,7 +1832,7 @@ int qcow2_expand_zero_clusters(BlockDriverState *bs,
 
     ret = expand_zero_clusters_in_l1(bs, s->l1_table, s->l1_size,
                                      &visited_l1_entries, l1_entries,
-                                     status_cb);
+                                     status_cb, cb_opaque);
     if (ret < 0) {
         goto fail;
     }
@@ -1865,7 +1867,7 @@ int qcow2_expand_zero_clusters(BlockDriverState *bs,
 
         ret = expand_zero_clusters_in_l1(bs, l1_table, s->snapshots[i].l1_size,
                                          &visited_l1_entries, l1_entries,
-                                         status_cb);
+                                         status_cb, cb_opaque);
         if (ret < 0) {
             goto fail;
         }
