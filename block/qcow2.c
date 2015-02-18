@@ -2751,9 +2751,9 @@ static int qcow2_amend_options(BlockDriverState *bs, QemuOpts *opts,
             error_report("Cannot change refcount entry width");
             return -ENOTSUP;
         } else {
-            /* if this assertion fails, this probably means a new option was
+            /* if this point is reached, this probably means a new option was
              * added without having it covered here */
-            assert(false);
+            abort();
         }
 
         desc++;
