@@ -1893,9 +1893,8 @@ static void bdrv_close(BlockDriverState *bs)
 {
     BdrvAioNotifier *ban, *ban_next;
 
-    if (bs->job) {
-        block_job_cancel_sync(bs->job);
-    }
+    assert(!bs->job);
+
     bdrv_drain_all(); /* complete I/O */
     bdrv_flush(bs);
     bdrv_drain_all(); /* in case flush left pending I/O */
@@ -1947,13 +1946,24 @@ static void bdrv_close(BlockDriverState *bs)
 void bdrv_close_all(void)
 {
     BlockDriverState *bs;
+    AioContext *aio_context;
 
-    QTAILQ_FOREACH(bs, &bdrv_states, device_list) {
-        AioContext *aio_context = bdrv_get_aio_context(bs);
+    blockdev_close_all_bdrv_states();
+    blk_remove_all_bs();
 
-        aio_context_acquire(aio_context);
-        bdrv_close(bs);
-        aio_context_release(aio_context);
+    while (!QTAILQ_EMPTY(&all_bdrv_states)) {
+        QTAILQ_FOREACH(bs, &all_bdrv_states, bs_list) {
+            aio_context = bdrv_get_aio_context(bs);
+
+            aio_context_acquire(aio_context);
+            if (bs->job) {
+                block_job_cancel_sync(bs->job);
+                aio_context_release(aio_context);
+                break;
+            }
+            aio_context_release(aio_context);
+        }
+        assert(bs);
     }
 }
 
