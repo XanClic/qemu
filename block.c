@@ -94,6 +94,9 @@ static QTAILQ_HEAD(, BlockDriverState) bdrv_states =
 static QTAILQ_HEAD(, BlockDriverState) graph_bdrv_states =
     QTAILQ_HEAD_INITIALIZER(graph_bdrv_states);
 
+static QTAILQ_HEAD(, BlockDriverState) all_bdrv_states =
+    QTAILQ_HEAD_INITIALIZER(all_bdrv_states);
+
 static QLIST_HEAD(, BlockDriver) bdrv_drivers =
     QLIST_HEAD_INITIALIZER(bdrv_drivers);
 
@@ -378,6 +381,8 @@ BlockDriverState *bdrv_new(void)
     qemu_co_queue_init(&bs->throttled_reqs[1]);
     bs->refcnt = 1;
     bs->aio_context = qemu_get_aio_context();
+
+    QTAILQ_INSERT_TAIL(&all_bdrv_states, bs, bs_list);
 
     return bs;
 }
@@ -2090,6 +2095,9 @@ static void bdrv_move_feature_fields(BlockDriverState *bs_dest,
 
     /* keep the same entry in bdrv_states */
     bs_dest->device_list = bs_src->device_list;
+    /* keep the same entry in all_bdrv_states */
+    bs_dest->bs_list = bs_src->bs_list;
+
     bs_dest->blk = bs_src->blk;
 
     memcpy(bs_dest->op_blockers, bs_src->op_blockers,
@@ -2190,6 +2198,8 @@ static void bdrv_delete(BlockDriverState *bs)
 
     /* remove from list, if necessary */
     bdrv_make_anon(bs);
+
+    QTAILQ_REMOVE(&all_bdrv_states, bs, bs_list);
 
     g_free(bs);
 }
