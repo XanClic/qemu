@@ -595,7 +595,7 @@ void qcow2_cache_put(BlockDriverState *bs, Qcow2Cache *c, void **table);
 
 /* qcow2-overlap.c functions */
 int qcow2_create_empty_metadata_list(BlockDriverState *bs, size_t cache_size,
-                                     Error **errp);
+                                     size_t max_total_mem_size, Error **errp);
 void qcow2_metadata_list_destroy(BlockDriverState *bs);
 void qcow2_metadata_list_enter(BlockDriverState *bs, uint64_t offset,
                                int nb_clusters, QCow2MetadataOverlap type);
