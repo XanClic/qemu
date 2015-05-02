@@ -279,6 +279,33 @@ Example:
 { "event": "POWERDOWN",
     "timestamp": { "seconds": 1267040730, "microseconds": 682951 } }
 
+QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED
+----------------------------------------
+
+Emitted by the qcow2 block driver if the preset size limit for the in-memory
+structures for metadata overlap prevention has been reached and an allocation
+of further resources has been denied. This means that it cannot be guaranteed
+that overlap checks will be performed for the specified range; if no range is
+given, no checks can be expected to be performed whatsoever.
+
+Note that this event does not guarantee that no check will be performed in the
+given range (or on the whole image, if no range is given), but only signals the
+possibility that this might be the case. The ability to check the full range or
+a part of it may be restored at any point in time.
+
+Data:
+- "reference": Device name if set; node name otherwise. (json-string)
+- "start":     Offset of the range of clusters (possibly) no longer being
+               checked for writes overlapping with existing metadata.
+               (json-int, optional)
+- "length":    Length of that range in bytes. (json-int, optional)
+
+Example:
+
+{ "event": "QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED",
+    "data": { "reference": "virtio0", "start": 805306368, "length": 268435456 },
+    "timestamp": { "seconds": 1429331400, "microseconds": 519454 } }
+
 QUORUM_FAILURE
 --------------
 
