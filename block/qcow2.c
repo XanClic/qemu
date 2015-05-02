@@ -452,6 +452,18 @@ static QemuOptsList qcow2_runtime_opts = {
             .help = "Check for unintended writes into an inactive L2 table",
         },
         {
+            .name = QCOW2_OPT_OVERLAP_BITMAP_SIZE,
+            .type = QEMU_OPT_SIZE,
+            .help = "Size for the bitmap cache used by the metadata overlap "
+                    "check",
+        },
+        {
+            .name = QCOW2_OPT_OVERLAP_TOTAL_SIZE_LIMIT,
+            .type = QEMU_OPT_SIZE,
+            .help = "Maximum total memory size to be used for the metadata "
+                    "overlap check structures",
+        },
+        {
             .name = QCOW2_OPT_CACHE_SIZE,
             .type = QEMU_OPT_SIZE,
             .help = "Maximum combined metadata (L2 tables and refcount blocks) "
@@ -767,8 +779,27 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
     s->cluster_offset_mask = (1LL << s->csize_shift) - 1;
 
     if (s->overlap_check) {
-        /* TODO: Let the user override this default */
-        ret = qcow2_create_empty_metadata_list(bs, 65536, SIZE_MAX, errp);
+        uint64_t cache_size, total_size;
+
+        cache_size = qemu_opt_get_size(opts, QCOW2_OPT_OVERLAP_BITMAP_SIZE,
+                                       65536);
+        if (cache_size > SIZE_MAX) {
+            error_setg(errp, "qcow2 option '" QCOW2_OPT_OVERLAP_BITMAP_SIZE
+                       "' expects an argument less or equal to %zu", SIZE_MAX);
+            ret = -EINVAL;
+            goto fail;
+        }
+
+        total_size = qemu_opt_get_size(opts, QCOW2_OPT_OVERLAP_TOTAL_SIZE_LIMIT,
+                                       SIZE_MAX);
+        if (total_size > SIZE_MAX) {
+            error_setg(errp, "qcow2 option '" QCOW2_OPT_OVERLAP_TOTAL_SIZE_LIMIT
+                       "' expects an argument less or equal to %zu", SIZE_MAX);
+            ret = -EINVAL;
+            goto fail;
+        }
+
+        ret = qcow2_create_empty_metadata_list(bs, cache_size, total_size, errp);
         if (ret < 0) {
             goto fail;
         }
