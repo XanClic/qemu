@@ -768,7 +768,7 @@ static int qcow2_open(BlockDriverState *bs, QDict *options, int flags,
 
     if (s->overlap_check) {
         /* TODO: Let the user override this default */
-        ret = qcow2_create_empty_metadata_list(bs, 65536, errp);
+        ret = qcow2_create_empty_metadata_list(bs, 65536, SIZE_MAX, errp);
         if (ret < 0) {
             goto fail;
         }
