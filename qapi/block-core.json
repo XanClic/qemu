@@ -1562,6 +1562,33 @@
             'mode':  'Qcow2OverlapCheckMode' } }
 
 ##
+# @Qcow2OverlapStructures
+#
+# Contains options for controlling the behavior of the metadata overlap
+# prevention structures.
+#
+# These structures contain the position, length, and type of the metadata
+# structures; one contains all of them in compressed form, the other one takes
+# up more space, but has faster access times. Therefore, the latter acts as a
+# cache of the former.
+#
+# @cache-size:       #optional size (in bytes) of the cache, defaults to 64 kB
+#
+# @total-size-limit: #optional maximum total size (in bytes) of all the metadata
+#                    overlap prevention data structures combined; if this limit
+#                    is exceeded, a QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED
+#                    event will be emitted and some parts of the image may no
+#                    longer be protected against erroneous overwriting of
+#                    metadata by (meta)data of a different kind. Defaults to
+#                    SIZE_MAX.
+#
+# Since: 2.5
+##
+{ 'struct': 'Qcow2OverlapStructures',
+  'data': { '*bitmap-size':      'int',
+            '*total-size-limit': 'int' } }
+
+##
 # @BlockdevOptionsQcow2
 #
 # Driver specific block device options for qcow2.
@@ -1583,6 +1610,9 @@
 # @overlap-check:         #optional which overlap checks to perform for writes
 #                         to the image, defaults to 'cached' (since 2.2)
 #
+# @overlap-structures:    #optional options for controlling the behavior of the
+#                         metadata overlap prevention structures (since 2.5)
+#
 # @cache-size:            #optional the maximum total size of the L2 table and
 #                         refcount block caches in bytes (since 2.2)
 #
@@ -1601,6 +1631,7 @@
             '*pass-discard-snapshot': 'bool',
             '*pass-discard-other': 'bool',
             '*overlap-check': 'Qcow2OverlapChecks',
+            '*overlap-structures': 'Qcow2OverlapStructures',
             '*cache-size': 'int',
             '*l2-cache-size': 'int',
             '*refcount-cache-size': 'int' } }
