@@ -180,4 +180,51 @@ qcow2: Marking image as corrupt: Data cluster offset 0x62a00 unaligned (L2 offse
 discard 65536/65536 bytes at offset 0
 64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
 read failed: Input/output error
+
+=== Testing memory limit ===
+
+Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+{"return": {}}
+
+--- Zero limit ---
+
+{"error": {"class": "GenericError", "desc": "Cannot allocate metadata list"}}
+
+--- Zero limit with overlap checks disabled ---
+
+{"return": {}}
+
+--- Limit too small for entering metadata ---
+
+{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED", "data": {"length": 268435456, "start": 0, "reference": "drv2"}}
+{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED", "data": {"length": 268435456, "start": 0, "reference": "drv2"}}
+{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED", "data": {"length": 268435456, "start": 0, "reference": "drv2"}}
+{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED", "data": {"length": 268435456, "start": 0, "reference": "drv2"}}
+{"return": {}}
+
+--- Limit too small for both bitmap and fragment list ---
+
+wrote 65536/65536 bytes at offset 0
+64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+{"return": {}}
+{"return": {}}
+wrote 65536/65536 bytes at offset 65536
+64 KiB, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+{"return": ""}
+
+--- Fragment list is larger than bitmap ---
+
+Formatting 'TEST_DIR/t.IMGFMT', fmt=IMGFMT size=67108864
+wrote 512/512 bytes at offset 0
+512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+{"return": {}}
+{"return": {}}
+{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "QCOW2_OVERLAP_CHECK_MEMORY_LIMIT_REACHED", "data": {"length": 2097152, "start": 2097152, "reference": "drv0"}}
+wrote 512/512 bytes at offset 0
+512 bytes, X ops; XX:XX:XX.X (XXX YYY/sec and XXX ops/sec)
+{"return": ""}
+qcow2: Marking image as corrupt: Preventing invalid write on metadata (overlaps with active L2 table); further corruption events will be suppressed
+{"timestamp": {"seconds":  TIMESTAMP, "microseconds":  TIMESTAMP}, "event": "BLOCK_IMAGE_CORRUPTED", "data": {"device": "drv0", "msg": "Preventing invalid write on metadata (overlaps with active L2 table)", "offset": 17920, "fatal": true, "size": 512}}
+write failed: Input/output error
+{"return": ""}
 *** done
