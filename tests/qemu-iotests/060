@@ -37,6 +37,7 @@ trap "_cleanup; exit \$status" 0 1 2 3 15
 # get standard environment, filters and checks
 . ./common.rc
 . ./common.filter
+. ./common.qemu
 
 # This tests qocw2-specific low-level functionality
 _supported_fmt qcow2
@@ -242,6 +243,227 @@ poke_file "$TEST_IMG" "$l2_offset"        "\x80\x00\x00\x00\x00\x05\x2a\x00"
 poke_file "$TEST_IMG" "$(($l2_offset+8))" "\x80\x00\x00\x00\x00\x06\x2a\x00"
 # Should emit two error messages
 $QEMU_IO -c "discard 0 64k" -c "read 64k 64k" "$TEST_IMG" | _filter_qemu_io
+
+echo
+echo "=== Testing memory limit ==="
+echo
+
+_make_test_img 64M
+# Use blockdev-add instead of adding the drive at startup, so that events which
+# are generated when the image is opened will be sent over QMP
+_launch_qemu
+_send_qemu_cmd $QEMU_HANDLE "{ 'execute': 'qmp_capabilities' }" 'return'
+
+echo
+echo '--- Zero limit ---'
+echo
+
+# This should fail (because allocating the metadata structure list itself fails)
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'blockdev-add'," \
+    "  'arguments': {" \
+    "      'options': {" \
+    "          'id': 'drv0'," \
+    "          'driver': 'qcow2'," \
+    "          'overlap-structures': {" \
+    "              'total-size-limit': 0" \
+    "          }," \
+    "          'file': {" \
+    "             'driver': 'file'," \
+    "             'filename': '$TEST_IMG'" \
+    "          } } } }" \
+    'error'
+
+echo
+echo '--- Zero limit with overlap checks disabled ---'
+echo
+
+# This should work (because overlap checks are disabled)
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'blockdev-add'," \
+    "  'arguments': {" \
+    "      'options': {" \
+    "          'id': 'drv1'," \
+    "          'driver': 'qcow2'," \
+    "          'overlap-check': 'none'," \
+    "          'overlap-structures': {" \
+    "              'total-size-limit': 0" \
+    "          }," \
+    "          'file': {" \
+    "             'driver': 'file'," \
+    "             'filename': '$TEST_IMG'" \
+    "          } } } }" \
+    'return'
+
+echo
+echo '--- Limit too small for entering metadata ---'
+echo
+
+# For the initial metadata structures, the following data is required:
+#  - Qcow2MetadataList (32 B on x86, 56 B on x64)
+#  - nb_windows * Qcow2MetadataWindow (nb_windows is
+#    ceil(x / (64k * WINDOW_SIZE)) = 1 (WINDOW_SIZE = 4096; x is the size of the
+#    underlying file, which is probably below 1 MB)); therefore, this is 24 B on
+#    x86, and 32 B on x64)
+#  - cache_entries * int (cache_entries is cache_size / WINDOW_SIZE =
+#    65536 / 4096 = 16, therefore this is 64 B on both x86 and x64)
+# In total, we need 120 B on x86 and 152 B on x64 (Linux/gcc).
+#
+# Creating a single bytemap takes WINDOW_SIZE (4096) B. Therefore, setting the
+# limit to 256 B will definitely suffice for the structures required to create
+# the metadata structures, but trying to enter even a single metadata structure
+# will fail.
+# The "start" field of the event(s) generated will be 0; the "length" field will
+# be WINDOW_SIZE * cluster_size = 4096 * 64k = 256M.
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'blockdev-add'," \
+    "  'arguments': {" \
+    "      'options': {" \
+    "          'id': 'drv2'," \
+    "          'driver': 'qcow2'," \
+    "          'overlap-structures': {" \
+    "              'bitmap-size': 65536," \
+    "              'total-size-limit': 256" \
+    "          }," \
+    "          'file': {" \
+    "             'driver': 'file'," \
+    "             'filename': '$TEST_IMG'" \
+    "          } } } }" \
+    'return'
+
+_cleanup_qemu
+
+echo
+echo '--- Limit too small for both bitmap and fragment list ---'
+echo
+
+# Now test the case of trying to convert the bitmap back to the fragment list,
+# but where memory does not suffice to hold both. Because the bitmap is released
+# after the fragment list has been created, it should work anyway, because the
+# implementation can consider the bitmap freed before it is actually freed.
+# In order for this to work on both x86 and x64, the fragment list needs to take
+# up more than 32 B (152 - 120) of memory. Every entry has 4 B, so we need 9
+# entries. One is the image header, then there is the L1 table, the refcount
+# table, a refcount block, and then there are more than 1000 free clusters; a
+# maximum of 256 clusters can be represented by a single fragment, so these are
+# another 4 entries. In total, there are thus 8 entries so far, so we need
+# another one, which we can do by writing data and thus creating an L2 table.
+$QEMU_IO -c 'write 0 64k' "$TEST_IMG" | _filter_qemu_io
+
+# Also, we need to point to an offset beyond WINDOW_SIZE * cluster_size (256M),
+# so that we can make qcow2 evict the first window.
+poke_file "$TEST_IMG" "$(($l2_offset+8))" "\x80\x00\x00\x00\x10\x00\x00\x00"
+
+_launch_qemu
+_send_qemu_cmd $QEMU_HANDLE "{ 'execute': 'qmp_capabilities' }" 'return'
+
+# For the planned cache eviction to work, bitmap-size must be WINDOW_SIZE;
+# therefore, the initial metadata structure size shrinks by 15 * sizeof(int),
+# that is, 60 B on both x86 and x64.
+# The total-size-limit should thus be 92 + 4096 = 4188
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'blockdev-add'," \
+    "  'arguments': {" \
+    "      'options': {" \
+    "          'id': 'drv0'," \
+    "          'driver': 'qcow2'," \
+    "          'overlap-structures': {" \
+    "              'bitmap-size': 4096," \
+    "              'total-size-limit': 4188" \
+    "          }," \
+    "          'file': {" \
+    "             'driver': 'file'," \
+    "             'filename': '$TEST_IMG'" \
+    "          } } } }" \
+    'return'
+
+# Writing something to the second data cluster, thus making qemu load the second
+# metadata window, evicting the first one
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'human-monitor-command'," \
+    "  'arguments': { 'command-line': 'qemu-io drv0 \"write 64k 64k\"' } }" \
+    'return'
+
+_cleanup_qemu
+
+echo
+echo '--- Fragment list is larger than bitmap ---'
+echo
+
+# Finally, test that bitmaps are not converted to fragment lists if the fragment
+# list actually is longer than the bitmap.
+CLUSTER_SIZE=512 _make_test_img 64M
+
+# Every L2 table describes 512 / 8 = 64 clusters, that is, a range of 32k.
+# Therefore, writing clusters 32k apart results in a alternating pattern of
+# L2 table and data cluster. If we write 1024 clusters in this way, the fragment
+# list for the first window would therefore have to contain at least 2048
+# fragments, which is longer (8 kB) than the bitmap is (4 kB fixed). Therefore,
+# the fragment list should not be generated on cache eviction.
+(for i in $(seq 0 1023); do
+    echo "write $(($i*32))k 512"
+done) | $QEMU_IO -t unsafe "$TEST_IMG" &> /dev/null
+
+l2_offset_512=$((0x4600))
+
+# Now point the first data cluster to WINDOW_SIZE * 512 = 2M
+# (the image length is about 2048 * 512 = 1M at this point)
+poke_file "$TEST_IMG" "$(($l2_offset_512))" "\x80\x00\x00\x00\x00\x20\x00\x00"
+# (the first cluster is now leaked, but who cares)
+
+# "Allocate" that cluster
+$QEMU_IO -c 'write 0 512' "$TEST_IMG" | _filter_qemu_io
+
+# And point the second data cluster to the first L2 table so we can test whether
+# the overlap check still works
+poke_file "$TEST_IMG" "$(($l2_offset_512+8))" "\x80\x00\x00\x00\x00\x00\x46\x00"
+
+cp "$TEST_IMG" /tmp
+
+_launch_qemu
+_send_qemu_cmd $QEMU_HANDLE "{ 'execute': 'qmp_capabilities' }" 'return'
+
+# Memory which we will allow to be allocated:
+#  - Qcow2MetadataList (32 B on x86, 56 B on x64)
+#  - nb_windows * Qcow2MetadataWindow (nb_windows is 2, because we made sure
+#    that we would have an image with two windows; therefore, this is 48 B on
+#    x86, and 64 B on x64)
+#  - cache_entries * int (cache_entries is cache_size / WINDOW_SIZE =
+#    4096 / 4096 = 1, therefore this is 4 B on both x86 and x64)
+#  - One bitmap (WINDOW_SIZE = 4096 B)
+# In total, that is 4220 B at most. If the bytemap would be converted to the
+# according fragment list, it would require 8 kB, which is definitely more.
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'blockdev-add'," \
+    "  'arguments': {" \
+    "      'options': {" \
+    "          'id': 'drv0'," \
+    "          'driver': 'qcow2'," \
+    "          'overlap-structures': {" \
+    "              'bitmap-size': 4096," \
+    "              'total-size-limit': 4220" \
+    "          }," \
+    "          'file': {" \
+    "             'driver': 'file'," \
+    "             'filename': '$TEST_IMG'" \
+    "          } } } }" \
+    'return'
+
+# Force cache eviction by accessing a cluster in the second window
+# (This will result in a "memory limit reached" event because there is no space
+# for the second bitmap)
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'human-monitor-command'," \
+    "  'arguments': { 'command-line': 'qemu-io drv0 \"write 0 512\"' } }" \
+    'return'
+
+# Trigger the overlap prevention
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'human-monitor-command'," \
+    "  'arguments': { 'command-line': 'qemu-io drv0 \"write 512 512\"' } }" \
+    'return'
+
+_cleanup_qemu
 
 # success, all done
 echo "*** done"
