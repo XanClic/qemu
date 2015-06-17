@@ -28,6 +28,7 @@
 
 #include "block/block_int.h"
 #include "qemu/option.h"
+#include "perf-test.h"
 
 static QemuOptsList raw_create_opts = {
     .name = "raw-create-opts",
@@ -62,6 +63,11 @@ static int coroutine_fn raw_co_writev(BlockDriverState *bs, int64_t sector_num,
     BlockDriver *drv;
     QEMUIOVector local_qiov;
     int ret;
+    static PERF_TIMER(raw_co_writev);
+    static PERF_TIMER(raw_sub_write);
+    static PERF_COUNTER(raw_sub_write_sectors);
+    static PERF_COUNTER(raw_sub_write_calls);
+    PERF_TIMER_START(raw_co_writev, 0);
 
     if (bs->probed && sector_num == 0) {
         /* As long as these conditions are true, we can't get partial writes to
@@ -72,6 +78,7 @@ static int coroutine_fn raw_co_writev(BlockDriverState *bs, int64_t sector_num,
         if (nb_sectors == 0) {
             /* qemu_iovec_to_buf() would fail, but we want to return success
              * instead of -EINVAL in this case. */
+            PERF_TIMER_STOP(raw_co_writev, 0);
             return 0;
         }
 
@@ -102,13 +109,18 @@ static int coroutine_fn raw_co_writev(BlockDriverState *bs, int64_t sector_num,
     }
 
     BLKDBG_EVENT(bs->file, BLKDBG_WRITE_AIO);
+    _pcraw_sub_write_sectors.counter += nb_sectors;
+    PERF_COUNTER_INC(raw_sub_write_calls);
+    PERF_TIMER_START(raw_sub_write, 0);
     ret = bdrv_co_writev(bs->file, sector_num, nb_sectors, qiov);
+    PERF_TIMER_STOP(raw_sub_write, 0);
 
 fail:
     if (qiov == &local_qiov) {
         qemu_iovec_destroy(&local_qiov);
     }
     qemu_vfree(buf);
+    PERF_TIMER_STOP(raw_co_writev, 0);
     return ret;
 }
 
@@ -125,7 +137,11 @@ static int coroutine_fn raw_co_write_zeroes(BlockDriverState *bs,
                                             int64_t sector_num, int nb_sectors,
                                             BdrvRequestFlags flags)
 {
-    return bdrv_co_write_zeroes(bs->file, sector_num, nb_sectors, flags);
+    static PERF_TIMER(raw_co_write_zeroes);
+    PERF_TIMER_START(raw_co_write_zeroes, 0);
+    int ret = bdrv_co_write_zeroes(bs->file, sector_num, nb_sectors, flags);
+    PERF_TIMER_STOP(raw_co_write_zeroes, 0);
+    return ret;
 }
 
 static int coroutine_fn raw_co_discard(BlockDriverState *bs,

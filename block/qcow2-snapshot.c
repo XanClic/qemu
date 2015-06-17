@@ -26,6 +26,10 @@
 #include "block/block_int.h"
 #include "block/qcow2.h"
 #include "qemu/error-report.h"
+#include "perf-test.h"
+
+EXTERN_PERF_TIMER(qcow2_sub_write);
+EXTERN_PERF_TIMER(qcow2_sub_sync_write);
 
 void qcow2_free_snapshots(BlockDriverState *bs)
 {
@@ -259,25 +263,33 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
         h.name_size = cpu_to_be16(name_size);
         offset = align_offset(offset, 8);
 
+        PERF_TIMER_START(qcow2_sub_write, 0);
         ret = bdrv_pwrite(bs->file, offset, &h, sizeof(h));
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
         if (ret < 0) {
             goto fail;
         }
         offset += sizeof(h);
 
+        PERF_TIMER_COUNTER_START(qcow2_sub_write, 0);
         ret = bdrv_pwrite(bs->file, offset, &extra, sizeof(extra));
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
         if (ret < 0) {
             goto fail;
         }
         offset += sizeof(extra);
 
+        PERF_TIMER_COUNTER_START(qcow2_sub_write, 0);
         ret = bdrv_pwrite(bs->file, offset, sn->id_str, id_str_size);
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
         if (ret < 0) {
             goto fail;
         }
         offset += id_str_size;
 
+        PERF_TIMER_COUNTER_START(qcow2_sub_write, 0);
         ret = bdrv_pwrite(bs->file, offset, sn->name, name_size);
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
         if (ret < 0) {
             goto fail;
         }
@@ -299,8 +311,10 @@ static int qcow2_write_snapshots(BlockDriverState *bs)
     header_data.nb_snapshots        = cpu_to_be32(s->nb_snapshots);
     header_data.snapshots_offset    = cpu_to_be64(snapshots_offset);
 
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, offsetof(QCowHeader, nb_snapshots),
                            &header_data, sizeof(header_data));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         goto fail;
     }
@@ -451,8 +465,10 @@ int qcow2_snapshot_create(BlockDriverState *bs, QEMUSnapshotInfo *sn_info)
         goto fail;
     }
 
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs->file, sn->l1_table_offset, l1_table,
                       s->l1_size * sizeof(uint64_t));
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         goto fail;
     }
@@ -593,8 +609,10 @@ int qcow2_snapshot_goto(BlockDriverState *bs, const char *snapshot_id)
         goto fail;
     }
 
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, s->l1_table_offset, sn_l1_table,
                            cur_l1_bytes);
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         goto fail;
     }

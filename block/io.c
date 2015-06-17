@@ -27,6 +27,7 @@
 #include "block/block_int.h"
 #include "block/throttle-groups.h"
 #include "qemu/error-report.h"
+#include "perf-test.h"
 
 #define NOT_DONE 0x7fffffff /* used while emulated sync operation in progress */
 
@@ -1100,6 +1101,10 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
     BlockDriver *drv = bs->drv;
     bool waited;
     int ret;
+    static PERF_TIMER(bdrv_aligned_pwritev_flush);
+    static PERF_COUNTER(bdrv_aligned_pwritev);
+
+    PERF_COUNTER_INC(bdrv_aligned_pwritev);
 
     int64_t sector_num = offset >> BDRV_SECTOR_BITS;
     unsigned int nb_sectors = bytes >> BDRV_SECTOR_BITS;
@@ -1136,7 +1141,11 @@ static int coroutine_fn bdrv_aligned_pwritev(BlockDriverState *bs,
     BLKDBG_EVENT(bs, BLKDBG_PWRITEV_DONE);
 
     if (ret == 0 && !bs->enable_write_cache) {
+        PERF_TIMER_START(bdrv_aligned_pwritev_flush, 0);
         ret = bdrv_co_flush(bs);
+        if (bs->blk) {
+            PERF_TIMER_STOP(bdrv_aligned_pwritev_flush, 0);
+        }
     }
 
     bdrv_set_dirty(bs, sector_num, nb_sectors);
@@ -1253,6 +1262,9 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
     QEMUIOVector local_qiov;
     bool use_local_qiov = false;
     int ret;
+    static PERF_TIMER(bdrv_co_do_pwritev_head);
+    static PERF_TIMER(bdrv_co_do_pwritev_tail);
+    static PERF_TIMER(bdrv_co_do_pwritev_write);
 
     if (!bs->drv) {
         return -ENOMEDIUM;
@@ -1287,6 +1299,8 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
         QEMUIOVector head_qiov;
         struct iovec head_iov;
 
+        PERF_TIMER_START(bdrv_co_do_pwritev_head, 0);
+
         mark_request_serialising(&req, align);
         wait_serialising_requests(&req);
 
@@ -1312,6 +1326,10 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
 
         bytes += offset & (align - 1);
         offset = offset & ~(align - 1);
+
+        if (bs->blk) {
+            PERF_TIMER_STOP(bdrv_co_do_pwritev_head, 0);
+        }
     }
 
     if ((offset + bytes) & (align - 1)) {
@@ -1319,6 +1337,8 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
         struct iovec tail_iov;
         size_t tail_bytes;
         bool waited;
+
+        PERF_TIMER_START(bdrv_co_do_pwritev_tail, 0);
 
         mark_request_serialising(&req, align);
         waited = wait_serialising_requests(&req);
@@ -1349,11 +1369,19 @@ static int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
         qemu_iovec_add(&local_qiov, tail_buf + tail_bytes, align - tail_bytes);
 
         bytes = ROUND_UP(bytes, align);
+
+        if (bs->blk) {
+            PERF_TIMER_STOP(bdrv_co_do_pwritev_tail, 0);
+        }
     }
 
+    PERF_TIMER_START(bdrv_co_do_pwritev_write, 0);
     ret = bdrv_aligned_pwritev(bs, &req, offset, bytes,
                                use_local_qiov ? &local_qiov : qiov,
                                flags);
+    if (bs->blk) {
+        PERF_TIMER_STOP(bdrv_co_do_pwritev_write, 0);
+    }
 
 fail:
 

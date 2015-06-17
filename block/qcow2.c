@@ -35,6 +35,12 @@
 #include "trace.h"
 #include "qemu/option_int.h"
 
+#include "perf-test.h"
+
+PERF_TIMER(qcow2_sub_write);
+PERF_TIMER(qcow2_sub_data_write);
+PERF_TIMER(qcow2_sub_sync_write);
+
 /*
   Differences with QCOW:
 
@@ -260,8 +266,10 @@ int qcow2_mark_dirty(BlockDriverState *bs)
     }
 
     val = cpu_to_be64(s->incompatible_features | QCOW2_INCOMPAT_DIRTY);
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs->file, offsetof(QCowHeader, incompatible_features),
                       &val, sizeof(val));
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         return ret;
     }
@@ -1160,6 +1168,7 @@ static int64_t coroutine_fn qcow2_co_get_block_status(BlockDriverState *bs,
 
     *pnum = nb_sectors;
     qemu_co_mutex_lock(&s->lock);
+    s->whl = WHL_GET_BLOCK_STATUS;
     ret = qcow2_get_cluster_offset(bs, sector_num << 9, pnum, &cluster_offset);
     qemu_co_mutex_unlock(&s->lock);
     if (ret < 0) {
@@ -1212,6 +1221,7 @@ static coroutine_fn int qcow2_co_readv(BlockDriverState *bs, int64_t sector_num,
     qemu_iovec_init(&hd_qiov, qiov->niov);
 
     qemu_co_mutex_lock(&s->lock);
+    s->whl = WHL_READV;
 
     while (remaining_sectors != 0) {
 
@@ -1253,6 +1263,7 @@ static coroutine_fn int qcow2_co_readv(BlockDriverState *bs, int64_t sector_num,
                     ret = bdrv_co_readv(bs->backing_hd, sector_num,
                                         n1, &local_qiov);
                     qemu_co_mutex_lock(&s->lock);
+                    s->whl = WHL_READV;
 
                     qemu_iovec_destroy(&local_qiov);
 
@@ -1318,6 +1329,7 @@ static coroutine_fn int qcow2_co_readv(BlockDriverState *bs, int64_t sector_num,
                                 (cluster_offset >> 9) + index_in_cluster,
                                 cur_nr_sectors, &hd_qiov);
             qemu_co_mutex_lock(&s->lock);
+            s->whl = WHL_READV;
             if (ret < 0) {
                 goto fail;
             }
@@ -1371,15 +1383,63 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
     uint64_t bytes_done = 0;
     uint8_t *cluster_data = NULL;
     QCowL2Meta *l2meta = NULL;
+    static PERF_TIMER(qcow2_writev);
+    static PERF_TIMER(qcow2_writev_alloc);
+    static PERF_TIMER(qcow2_writev_l2);
+    static PERF_TIMER(qcow2_writev_iov_ops);
+    static PERF_TIMER(qcow2_writev_overlap_check);
+    static PERF_TIMER(qcow2_writev_lock);
+    static PERF_TIMER(qcow2_writev_lock_gbs);
+    static PERF_TIMER(qcow2_writev_lock_readv);
+    static PERF_TIMER(qcow2_writev_lock_writev);
+    static PERF_TIMER(qcow2_writev_lock_prealloc);
+    static PERF_TIMER(qcow2_writev_lock_write_zeros);
+    static PERF_TIMER(qcow2_writev_lock_discard);
+    static PERF_TIMER(qcow2_writev_lock_flush);
+    static PERF_COUNTER(qcow2_writev_sectors);
+    static PERF_COUNTER(qcow2_sub_data_write_calls);
+
+    PERF_TIMER_START(qcow2_writev, 0);
 
     trace_qcow2_writev_start_req(qemu_coroutine_self(), sector_num,
                                  remaining_sectors);
 
+    PERF_TIMER_START(qcow2_writev_iov_ops, 0);
     qemu_iovec_init(&hd_qiov, qiov->niov);
+    PERF_TIMER_STOP(qcow2_writev_iov_ops, 0);
 
     s->cluster_cache_offset = -1; /* disable compressed cache */
 
+    PERF_TIMER_START(qcow2_writev_lock, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_gbs, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_readv, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_writev, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_prealloc, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_write_zeros, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_discard, 0);
+    PERF_TIMER_DECL(qcow2_writev_lock_flush, 0);
+    enum WhoHoldsLock whl = s->whl;
+    switch (whl) {
+        case WHL_GET_BLOCK_STATUS:  PERF_TIMER_START_NODECL(qcow2_writev_lock_gbs, 0);          break;
+        case WHL_READV:             PERF_TIMER_START_NODECL(qcow2_writev_lock_readv, 0);        break;
+        case WHL_WRITEV:            PERF_TIMER_START_NODECL(qcow2_writev_lock_writev, 0);       break;
+        case WHL_PREALLOC:          PERF_TIMER_START_NODECL(qcow2_writev_lock_prealloc, 0);     break;
+        case WHL_WRITE_ZEROS:       PERF_TIMER_START_NODECL(qcow2_writev_lock_write_zeros, 0);  break;
+        case WHL_DISCARD:           PERF_TIMER_START_NODECL(qcow2_writev_lock_discard, 0);      break;
+        case WHL_FLUSH:             PERF_TIMER_START_NODECL(qcow2_writev_lock_flush, 0);        break;
+    }
     qemu_co_mutex_lock(&s->lock);
+    PERF_TIMER_STOP(qcow2_writev_lock, 0);
+    switch (whl) {
+        case WHL_GET_BLOCK_STATUS:  PERF_TIMER_STOP(qcow2_writev_lock_gbs, 0);          break;
+        case WHL_READV:             PERF_TIMER_STOP(qcow2_writev_lock_readv, 0);        break;
+        case WHL_WRITEV:            PERF_TIMER_STOP(qcow2_writev_lock_writev, 0);       break;
+        case WHL_PREALLOC:          PERF_TIMER_STOP(qcow2_writev_lock_prealloc, 0);     break;
+        case WHL_WRITE_ZEROS:       PERF_TIMER_STOP(qcow2_writev_lock_write_zeros, 0);  break;
+        case WHL_DISCARD:           PERF_TIMER_STOP(qcow2_writev_lock_discard, 0);      break;
+        case WHL_FLUSH:             PERF_TIMER_STOP(qcow2_writev_lock_flush, 0);        break;
+    }
+    s->whl = WHL_WRITEV;
 
     while (remaining_sectors != 0) {
 
@@ -1395,17 +1455,21 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
                 QCOW_MAX_CRYPT_CLUSTERS * s->cluster_sectors - index_in_cluster;
         }
 
+        PERF_TIMER_START(qcow2_writev_alloc, 0);
         ret = qcow2_alloc_cluster_offset(bs, sector_num << 9,
             &cur_nr_sectors, &cluster_offset, &l2meta);
         if (ret < 0) {
             goto fail;
         }
+        PERF_TIMER_STOP(qcow2_writev_alloc, 0);
 
         assert((cluster_offset & 511) == 0);
 
+        PERF_TIMER_START(qcow2_writev_iov_ops, 1);
         qemu_iovec_reset(&hd_qiov);
         qemu_iovec_concat(&hd_qiov, qiov, bytes_done,
             cur_nr_sectors * 512);
+        PERF_TIMER_STOP(qcow2_writev_iov_ops, 1);
 
         if (bs->encrypted) {
             Error *err = NULL;
@@ -1437,9 +1501,11 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
                 cur_nr_sectors * 512);
         }
 
+        PERF_TIMER_START(qcow2_writev_overlap_check, 0);
         ret = qcow2_pre_write_overlap_check(bs, 0,
                 cluster_offset + index_in_cluster * BDRV_SECTOR_SIZE,
                 cur_nr_sectors * BDRV_SECTOR_SIZE);
+        PERF_TIMER_STOP(qcow2_writev_overlap_check, 0);
         if (ret < 0) {
             goto fail;
         }
@@ -1448,14 +1514,43 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
         BLKDBG_EVENT(bs->file, BLKDBG_WRITE_AIO);
         trace_qcow2_writev_data(qemu_coroutine_self(),
                                 (cluster_offset >> 9) + index_in_cluster);
+        _pcqcow2_writev_sectors.counter += cur_nr_sectors;
+        PERF_COUNTER_INC(qcow2_sub_data_write_calls);
+        PERF_TIMER_START(qcow2_sub_write, 0);
+        PERF_TIMER_START(qcow2_sub_data_write, 0);
         ret = bdrv_co_writev(bs->file,
                              (cluster_offset >> 9) + index_in_cluster,
                              cur_nr_sectors, &hd_qiov);
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
+        PERF_TIMER_STOP(qcow2_sub_data_write, 0);
+        PERF_TIMER_START(qcow2_writev_lock, 0);
+        whl = s->whl;
+        switch (whl) {
+            case WHL_GET_BLOCK_STATUS:  PERF_TIMER_START_NODECL(qcow2_writev_lock_gbs, 0);          break;
+            case WHL_READV:             PERF_TIMER_START_NODECL(qcow2_writev_lock_readv, 0);        break;
+            case WHL_WRITEV:            PERF_TIMER_START_NODECL(qcow2_writev_lock_writev, 0);       break;
+            case WHL_PREALLOC:          PERF_TIMER_START_NODECL(qcow2_writev_lock_prealloc, 0);     break;
+            case WHL_WRITE_ZEROS:       PERF_TIMER_START_NODECL(qcow2_writev_lock_write_zeros, 0);  break;
+            case WHL_DISCARD:           PERF_TIMER_START_NODECL(qcow2_writev_lock_discard, 0);      break;
+            case WHL_FLUSH:             PERF_TIMER_START_NODECL(qcow2_writev_lock_flush, 0);        break;
+        }
         qemu_co_mutex_lock(&s->lock);
+        PERF_TIMER_STOP(qcow2_writev_lock, 0);
+        switch (whl) {
+            case WHL_GET_BLOCK_STATUS:  PERF_TIMER_STOP(qcow2_writev_lock_gbs, 0);          break;
+            case WHL_READV:             PERF_TIMER_STOP(qcow2_writev_lock_readv, 0);        break;
+            case WHL_WRITEV:            PERF_TIMER_STOP(qcow2_writev_lock_writev, 0);       break;
+            case WHL_PREALLOC:          PERF_TIMER_STOP(qcow2_writev_lock_prealloc, 0);     break;
+            case WHL_WRITE_ZEROS:       PERF_TIMER_STOP(qcow2_writev_lock_write_zeros, 0);  break;
+            case WHL_DISCARD:           PERF_TIMER_STOP(qcow2_writev_lock_discard, 0);      break;
+            case WHL_FLUSH:             PERF_TIMER_STOP(qcow2_writev_lock_flush, 0);        break;
+        }
+        s->whl = WHL_WRITEV;
         if (ret < 0) {
             goto fail;
         }
 
+        PERF_TIMER_START(qcow2_writev_l2, 0);
         while (l2meta != NULL) {
             QCowL2Meta *next;
 
@@ -1475,6 +1570,7 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
             g_free(l2meta);
             l2meta = next;
         }
+        PERF_TIMER_STOP(qcow2_writev_l2, 0);
 
         remaining_sectors -= cur_nr_sectors;
         sector_num += cur_nr_sectors;
@@ -1486,6 +1582,7 @@ static coroutine_fn int qcow2_co_writev(BlockDriverState *bs,
 fail:
     qemu_co_mutex_unlock(&s->lock);
 
+    PERF_TIMER_START(qcow2_writev_l2, 1);
     while (l2meta != NULL) {
         QCowL2Meta *next;
 
@@ -1498,10 +1595,15 @@ fail:
         g_free(l2meta);
         l2meta = next;
     }
+    PERF_TIMER_STOP(qcow2_writev_l2, 1);
 
+    PERF_TIMER_START(qcow2_writev_iov_ops, 2);
     qemu_iovec_destroy(&hd_qiov);
+    PERF_TIMER_STOP(qcow2_writev_iov_ops, 2);
     qemu_vfree(cluster_data);
     trace_qcow2_writev_done_req(qemu_coroutine_self(), ret);
+
+    PERF_TIMER_STOP(qcow2_writev, 0);
 
     return ret;
 }
@@ -1780,7 +1882,9 @@ int qcow2_update_header(BlockDriverState *bs)
     }
 
     /* Write the new header */
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs->file, 0, header, s->cluster_size);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         goto fail;
     }
@@ -1860,8 +1964,10 @@ static int preallocate(BlockDriverState *bs)
     if (host_offset != 0) {
         uint8_t buf[BDRV_SECTOR_SIZE];
         memset(buf, 0, BDRV_SECTOR_SIZE);
+        PERF_TIMER_START(qcow2_sub_write, 0);
         ret = bdrv_write(bs->file, (host_offset >> BDRV_SECTOR_BITS) + num - 1,
                          buf, 1);
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
         if (ret < 0) {
             return ret;
         }
@@ -2009,7 +2115,9 @@ static int qcow2_create2(const char *filename, int64_t total_size,
             cpu_to_be64(QCOW2_COMPAT_LAZY_REFCOUNTS);
     }
 
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs, 0, header, cluster_size);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     g_free(header);
     if (ret < 0) {
         error_setg_errno(errp, -ret, "Could not write qcow2 header");
@@ -2019,7 +2127,9 @@ static int qcow2_create2(const char *filename, int64_t total_size,
     /* Write a refcount table with one refcount block */
     refcount_table = g_malloc0(2 * cluster_size);
     refcount_table[0] = cpu_to_be64(2 * cluster_size);
+    PERF_TIMER_COUNTER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs, cluster_size, refcount_table, 2 * cluster_size);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     g_free(refcount_table);
 
     if (ret < 0) {
@@ -2075,6 +2185,7 @@ static int qcow2_create2(const char *filename, int64_t total_size,
     if (prealloc != PREALLOC_MODE_OFF) {
         BDRVQcowState *s = bs->opaque;
         qemu_co_mutex_lock(&s->lock);
+        s->whl = WHL_PREALLOC;
         ret = preallocate(bs);
         qemu_co_mutex_unlock(&s->lock);
         if (ret < 0) {
@@ -2207,17 +2318,21 @@ static coroutine_fn int qcow2_co_write_zeroes(BlockDriverState *bs,
 {
     int ret;
     BDRVQcowState *s = bs->opaque;
+    static PERF_TIMER(qcow2_co_write_zeroes);
 
     /* Emulate misaligned zero writes */
     if (sector_num % s->cluster_sectors || nb_sectors % s->cluster_sectors) {
         return -ENOTSUP;
     }
 
+    PERF_TIMER_START(qcow2_co_write_zeroes, 0);
     /* Whatever is left can use real zero clusters */
     qemu_co_mutex_lock(&s->lock);
+    s->whl = WHL_WRITE_ZEROS;
     ret = qcow2_zero_clusters(bs, sector_num << BDRV_SECTOR_BITS,
         nb_sectors);
     qemu_co_mutex_unlock(&s->lock);
+    PERF_TIMER_STOP(qcow2_co_write_zeroes, 0);
 
     return ret;
 }
@@ -2229,6 +2344,7 @@ static coroutine_fn int qcow2_co_discard(BlockDriverState *bs,
     BDRVQcowState *s = bs->opaque;
 
     qemu_co_mutex_lock(&s->lock);
+    s->whl = WHL_DISCARD;
     ret = qcow2_discard_clusters(bs, sector_num << BDRV_SECTOR_BITS,
         nb_sectors, QCOW2_DISCARD_REQUEST, false);
     qemu_co_mutex_unlock(&s->lock);
@@ -2266,8 +2382,10 @@ static int qcow2_truncate(BlockDriverState *bs, int64_t offset)
 
     /* write updated header.size */
     offset = cpu_to_be64(offset);
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, offsetof(QCowHeader, size),
                            &offset, sizeof(uint64_t));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         return ret;
     }
@@ -2358,7 +2476,11 @@ static int qcow2_write_compressed(BlockDriverState *bs, int64_t sector_num,
         }
 
         BLKDBG_EVENT(bs->file, BLKDBG_WRITE_COMPRESSED);
+        PERF_TIMER_START(qcow2_sub_write, 0);
+        PERF_TIMER_START(qcow2_sub_data_write, 0);
         ret = bdrv_pwrite(bs->file, cluster_offset, out_buf, out_len);
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
+        PERF_TIMER_STOP(qcow2_sub_data_write, 0);
         if (ret < 0) {
             goto fail;
         }
@@ -2407,8 +2529,10 @@ static int make_completely_empty(BlockDriverState *bs)
     /* After this call, neither the in-memory nor the on-disk refcount
      * information accurately describe the actual references */
 
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_write_zeroes(bs->file, s->l1_table_offset / BDRV_SECTOR_SIZE,
                             l1_clusters * s->cluster_sectors, 0);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         goto fail_broken_refcounts;
     }
@@ -2421,9 +2545,11 @@ static int make_completely_empty(BlockDriverState *bs)
      * overwrite parts of the existing refcount and L1 table, which is not
      * an issue because the dirty flag is set, complete data loss is in fact
      * desired and partial data loss is consequently fine as well */
+    PERF_TIMER_COUNTER_START(qcow2_sub_write, 0);
     ret = bdrv_write_zeroes(bs->file, s->cluster_size / BDRV_SECTOR_SIZE,
                             (2 + l1_clusters) * s->cluster_size /
                             BDRV_SECTOR_SIZE, 0);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     /* This call (even if it failed overall) may have overwritten on-disk
      * refcount structures; in that case, the in-memory refcount information
      * will probably differ from the on-disk information which makes the BDS
@@ -2441,8 +2567,10 @@ static int make_completely_empty(BlockDriverState *bs)
     cpu_to_be64w(&l1_ofs_rt_ofs_cls.l1_offset, 3 * s->cluster_size);
     cpu_to_be64w(&l1_ofs_rt_ofs_cls.reftable_offset, s->cluster_size);
     cpu_to_be32w(&l1_ofs_rt_ofs_cls.reftable_clusters, 1);
+    PERF_TIMER_COUNTER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite_sync(bs->file, offsetof(QCowHeader, l1_table_offset),
                            &l1_ofs_rt_ofs_cls, sizeof(l1_ofs_rt_ofs_cls));
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         goto fail_broken_refcounts;
     }
@@ -2472,8 +2600,10 @@ static int make_completely_empty(BlockDriverState *bs)
 
     /* Enter the first refblock into the reftable */
     rt_entry = cpu_to_be64(2 * s->cluster_size);
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, s->cluster_size,
                            &rt_entry, sizeof(rt_entry));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         goto fail_broken_refcounts;
     }
@@ -2563,16 +2693,26 @@ static coroutine_fn int qcow2_co_flush_to_os(BlockDriverState *bs)
 {
     BDRVQcowState *s = bs->opaque;
     int ret;
+    static PERF_TIMER(qcow2_co_flush_l2);
+    static PERF_TIMER(qcow2_co_flush_rb);
+    static PERF_COUNTER(qcow2_co_flush);
+
+    PERF_COUNTER_INC(qcow2_co_flush);
 
     qemu_co_mutex_lock(&s->lock);
+    s->whl = WHL_FLUSH;
+    PERF_TIMER_START(qcow2_co_flush_l2, 0);
     ret = qcow2_cache_flush(bs, s->l2_table_cache);
+    PERF_TIMER_STOP(qcow2_co_flush_l2, 0);
     if (ret < 0) {
         qemu_co_mutex_unlock(&s->lock);
         return ret;
     }
 
     if (qcow2_need_accurate_refcounts(s)) {
+        PERF_TIMER_START(qcow2_co_flush_rb, 0);
         ret = qcow2_cache_flush(bs, s->refcount_block_cache);
+        PERF_TIMER_STOP(qcow2_co_flush_rb, 0);
         if (ret < 0) {
             qemu_co_mutex_unlock(&s->lock);
             return ret;

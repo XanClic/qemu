@@ -226,6 +226,16 @@ typedef uint64_t Qcow2GetRefcountFunc(const void *refcount_array,
 typedef void Qcow2SetRefcountFunc(void *refcount_array,
                                   uint64_t index, uint64_t value);
 
+enum WhoHoldsLock {
+   WHL_GET_BLOCK_STATUS,
+   WHL_READV,
+   WHL_WRITEV,
+   WHL_PREALLOC,
+   WHL_WRITE_ZEROS,
+   WHL_DISCARD,
+   WHL_FLUSH,
+};
+
 typedef struct BDRVQcowState {
     int cluster_bits;
     int cluster_size;
@@ -257,6 +267,7 @@ typedef struct BDRVQcowState {
     uint64_t free_byte_offset;
 
     CoMutex lock;
+    enum WhoHoldsLock whl;
 
     QCryptoCipher *cipher; /* current cipher, NULL if no key yet */
     uint32_t crypt_method_header;

@@ -26,6 +26,10 @@
 #include "qemu-common.h"
 #include "qcow2.h"
 #include "trace.h"
+#include "perf-test.h"
+
+EXTERN_PERF_TIMER(qcow2_sub_write);
+EXTERN_PERF_TIMER(qcow2_sub_sync_write);
 
 typedef struct Qcow2CachedTable {
     int64_t  offset;
@@ -157,8 +161,10 @@ static int qcow2_cache_entry_flush(BlockDriverState *bs, Qcow2Cache *c, int i)
         BLKDBG_EVENT(bs->file, BLKDBG_L2_UPDATE);
     }
 
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs->file, c->entries[i].offset,
                       qcow2_cache_get_table_addr(bs, c, i), s->cluster_size);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         return ret;
     }
@@ -174,6 +180,10 @@ int qcow2_cache_flush(BlockDriverState *bs, Qcow2Cache *c)
     int result = 0;
     int ret;
     int i;
+    static PERF_TIMER(qcow2_cache_flush_flush);
+    static PERF_COUNTER(qcow2_cache_flush);
+
+    PERF_COUNTER_INC(qcow2_cache_flush);
 
     trace_qcow2_cache_flush(qemu_coroutine_self(), c == s->l2_table_cache);
 
@@ -185,7 +195,9 @@ int qcow2_cache_flush(BlockDriverState *bs, Qcow2Cache *c)
     }
 
     if (result == 0) {
+        PERF_TIMER_START(qcow2_cache_flush_flush, 0);
         ret = bdrv_flush(bs->file);
+        PERF_TIMER_STOP(qcow2_cache_flush_flush, 0);
         if (ret < 0) {
             result = ret;
         }

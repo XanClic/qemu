@@ -13,10 +13,12 @@
 #include "block/block.h"
 #include "block/block_int.h" /* for info_f() */
 #include "block/qapi.h"
+#include "qemu/atomic.h"
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/timer.h"
 #include "sysemu/block-backend.h"
+#include "perf-test.h"
 
 #define CMD_NOFILE_OK   0x01
 
@@ -2223,6 +2225,255 @@ static const cmdinfo_t help_cmd = {
     .oneline    = "help for one or all commands",
 };
 
+struct random_io_data {
+    BlockBackend *blk;
+    void *buf;
+    int iterations;
+    unsigned done;
+    bool read;
+};
+
+static void coroutine_fn do_random_io(void *opaque)
+{
+    struct random_io_data *riod = opaque;
+    static PERF_TIMER(do_random_io);
+
+    for (int i = 0; i < riod->iterations; i++) {
+        uint64_t offset = rand() << 12;
+        offset %= blk_getlength(riod->blk);
+        PERF_TIMER_START(do_random_io, 0);
+        int ret;
+        if (riod->read) {
+            ret = blk_read(riod->blk, offset / 512, riod->buf, 4096 / 512);
+        } else {
+            ret = blk_write(riod->blk, offset / 512, riod->buf, 4096 / 512);
+        }
+        PERF_TIMER_STOP(do_random_io, 0);
+        if (ret < 0) {
+            fprintf(stderr, "%lu: %s\n", offset, strerror(-ret));
+        }
+    }
+
+    atomic_inc(&riod->done);
+}
+
+static int random_io_f(BlockBackend *blk, int argc, char **argv)
+{
+    struct timeval tv1, tv2;
+    AioContext *aio_context = blk_get_aio_context(blk);
+    int requests = 1;
+    struct random_io_data riod = {
+        .blk        = blk,
+        .buf        = blk_blockalign(blk, 4096)
+    };
+    memset(riod.buf, 42, 4096);
+    static PERF_TIMER(random_io_f);
+
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            for (int j = 1; argv[i][j]; j++) {
+                switch (argv[i][j]) {
+                    case 'p': requests = 8; break;
+                    case 'r': riod.read = true; break;
+                }
+            }
+        } else {
+            riod.iterations = cvtnum(argv[i]);
+        }
+    }
+
+    Coroutine *co[requests];
+    for (int i = 0; i < requests; i++) {
+        co[i] = qemu_coroutine_create(do_random_io);
+    }
+
+    srand(time(NULL));
+
+    gettimeofday(&tv1, NULL);
+    PERF_TIMER_START(random_io_f, 0);
+    for (int i = 0; i < requests; i++) {
+        qemu_coroutine_enter(co[i], &riod);
+    }
+    while (riod.done < requests) {
+        aio_poll(aio_context, true);
+    }
+    blk_flush(blk);
+    PERF_TIMER_STOP(random_io_f, 0);
+    gettimeofday(&tv2, NULL);
+
+    tv2 = tsub(tv2, tv1);
+    printf("%.8f sec\n", tv2.tv_sec + tv2.tv_usec / 1000000.);
+
+    const struct perf_timer *pt = NULL;
+    while ((pt = next_perf_timer(pt))) {
+        if (pt->time_spent) {
+            printf("PT %-30s: %20" PRIu64 " time units\n", pt->name, pt->time_spent);
+        }
+    }
+    const struct perf_counter *pc = NULL;
+    while ((pc = next_perf_counter(pc))) {
+        if (pc->counter) {
+            printf("PC %-30s: %20" PRIu64 " times\n", pc->name, pc->counter);
+        }
+    }
+
+    qemu_vfree(riod.buf);
+
+    return 0;
+}
+
+
+static const cmdinfo_t random_io_cmd = {
+    .name       = "random-io",
+    .cfunc      = random_io_f,
+    .argmin     = 1,
+    .argmax     = 2,
+    .args       = "[-p] iterations",
+    .oneline    = "performs random I/O",
+};
+
+struct seq_io_data {
+    BlockBackend *blk;
+    void *buf;
+    int iterations;
+    unsigned done;
+    bool read;
+};
+
+static void coroutine_fn do_seq_io(void *opaque)
+{
+    struct seq_io_data *siod = opaque;
+    uint64_t offset, len;
+    static PERF_TIMER(do_seq_io);
+
+    len = blk_getlength(siod->blk);
+
+    if (len <= siod->iterations * 4096ul) {
+        offset = 0;
+    } else {
+        offset = rand() << 12;
+        offset %= len - siod->iterations * 4096ul;
+    }
+
+    for (int i = 0; i < siod->iterations; i++) {
+        PERF_TIMER_START(do_seq_io, 0);
+        int ret;
+        if (siod->read) {
+            ret = blk_read(siod->blk, offset / 512, siod->buf, 4096 / 512);
+        } else {
+            ret = blk_write(siod->blk, offset / 512, siod->buf, 4096 / 512);
+        }
+        PERF_TIMER_STOP(do_seq_io, 0);
+        if (ret < 0) {
+            fprintf(stderr, "%lu: %s\n", offset, strerror(-ret));
+        }
+
+        offset = (offset + 4096) % len;
+    }
+
+    atomic_inc(&siod->done);
+}
+
+static int seq_io_f(BlockBackend *blk, int argc, char **argv)
+{
+    struct timeval tv1, tv2;
+    AioContext *aio_context = blk_get_aio_context(blk);
+    bool multiple = false;
+    int requests = 1;
+    struct seq_io_data siod = {
+        .blk = blk
+    };
+    static PERF_TIMER(seq_io_f);
+
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            for (int j = 1; argv[i][j]; j++) {
+                switch (argv[i][j]) {
+                case 'm': multiple = true; break;
+                case 'p': requests = 8; break;
+                case 'r': siod.read = true; break;
+                }
+            }
+        } else {
+            siod.iterations = cvtnum(argv[i]);
+        }
+    }
+
+    Coroutine *co[requests];
+    for (int i = 0; i < requests; i++) {
+        co[i] = qemu_coroutine_create(do_seq_io);
+    }
+
+    if (multiple) {
+        siod.buf = blk_blockalign(blk, 4096);
+        memset(siod.buf, 42, 4096);
+    }
+
+    PERF_TIMER_COUNTER(seq_io_f, 0);
+
+    srand(time(NULL));
+
+    if (multiple) {
+        gettimeofday(&tv1, NULL);
+        PERF_TIMER_COUNTER_START(seq_io_f, 0);
+        for (int i = 0; i < requests; i++) {
+            qemu_coroutine_enter(co[i], &siod);
+        }
+        while (siod.done < requests) {
+            aio_poll(aio_context, true);
+        }
+    } else {
+        uint64_t offset, len;
+        len = blk_getlength(blk);
+        if (len <= siod.iterations * 4096ul) {
+            siod.iterations = len / 4096;
+            offset = 0;
+        } else {
+            offset = rand() << 12;
+            offset %= len - siod.iterations * 4096ul;
+        }
+        len = siod.iterations * 4096ul;
+        siod.buf = blk_blockalign(blk, len);
+        memset(siod.buf, 42, len);
+        gettimeofday(&tv1, NULL);
+        PERF_TIMER_COUNTER_START(seq_io_f, 0);
+        blk_write(blk, offset / 512, siod.buf, len / 512);
+    }
+    blk_flush(blk);
+    PERF_TIMER_STOP(seq_io_f, 0);
+    gettimeofday(&tv2, NULL);
+
+    tv2 = tsub(tv2, tv1);
+    printf("%.8f sec\n", tv2.tv_sec + tv2.tv_usec / 1000000.);
+
+    qemu_vfree(siod.buf);
+
+    const struct perf_timer *pt = NULL;
+    while ((pt = next_perf_timer(pt))) {
+        if (pt->time_spent) {
+            printf("PT %-30s: %20" PRIu64 " time units\n", pt->name, pt->time_spent);
+        }
+    }
+    const struct perf_counter *pc = NULL;
+    while ((pc = next_perf_counter(pc))) {
+        if (pc->counter) {
+            printf("PC %-30s: %20" PRIu64 " times\n", pc->name, pc->counter);
+        }
+    }
+
+    return 0;
+}
+
+
+static const cmdinfo_t seq_io_cmd = {
+    .name       = "seq-io",
+    .cfunc      = seq_io_f,
+    .argmin     = 1,
+    .argmax     = 3,
+    .args       = "[-m] [-p] iterations",
+    .oneline    = "performs sequential I/O",
+};
+
 bool qemuio_command(BlockBackend *blk, const char *cmd)
 {
     char *input;
@@ -2273,4 +2524,6 @@ static void __attribute((constructor)) init_qemuio_commands(void)
     qemuio_add_command(&abort_cmd);
     qemuio_add_command(&sleep_cmd);
     qemuio_add_command(&sigraise_cmd);
+    qemuio_add_command(&random_io_cmd);
+    qemuio_add_command(&seq_io_cmd);
 }

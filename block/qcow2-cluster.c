@@ -28,6 +28,11 @@
 #include "block/block_int.h"
 #include "block/qcow2.h"
 #include "trace.h"
+#include "perf-test.h"
+
+EXTERN_PERF_TIMER(qcow2_sub_write);
+EXTERN_PERF_TIMER(qcow2_sub_data_write);
+EXTERN_PERF_TIMER(qcow2_sub_sync_write);
 
 int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
                         bool exact_size)
@@ -105,7 +110,9 @@ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
     BLKDBG_EVENT(bs->file, BLKDBG_L1_GROW_WRITE_TABLE);
     for(i = 0; i < s->l1_size; i++)
         new_l1_table[i] = cpu_to_be64(new_l1_table[i]);
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, new_l1_table_offset, new_l1_table, new_l1_size2);
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0)
         goto fail;
     for(i = 0; i < s->l1_size; i++)
@@ -115,7 +122,9 @@ int qcow2_grow_l1_table(BlockDriverState *bs, uint64_t min_size,
     BLKDBG_EVENT(bs->file, BLKDBG_L1_GROW_ACTIVATE_TABLE);
     cpu_to_be32w((uint32_t*)data, new_l1_size);
     stq_be_p(data + 4, new_l1_table_offset);
+    PERF_TIMER_COUNTER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, offsetof(QCowHeader, l1_size), data,sizeof(data));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         goto fail;
     }
@@ -193,8 +202,10 @@ int qcow2_write_l1_entry(BlockDriverState *bs, int l1_index)
     }
 
     BLKDBG_EVENT(bs->file, BLKDBG_L1_UPDATE);
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, s->l1_table_offset + 8 * l1_start_index,
         buf, sizeof(buf));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         return ret;
     }
@@ -404,6 +415,8 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
     QEMUIOVector qiov;
     struct iovec iov;
     int n, ret;
+    static PERF_TIMER(qcow2_copy_sectors_read);
+    static PERF_TIMER(qcow2_copy_sectors_write);
 
     n = n_end - n_start;
     if (n <= 0) {
@@ -429,7 +442,9 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
      * interface.  This avoids double I/O throttling and request tracking,
      * which can lead to deadlock when block layer copy-on-read is enabled.
      */
+    PERF_TIMER_START(qcow2_copy_sectors_read, 0);
     ret = bs->drv->bdrv_co_readv(bs, start_sect + n_start, n, &qiov);
+    PERF_TIMER_STOP(qcow2_copy_sectors_read, 0);
     if (ret < 0) {
         goto out;
     }
@@ -453,7 +468,11 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
     }
 
     BLKDBG_EVENT(bs->file, BLKDBG_COW_WRITE);
+    PERF_TIMER_START(qcow2_sub_write, 0);
+    PERF_TIMER_START(qcow2_copy_sectors_write, 0);
     ret = bdrv_co_writev(bs->file, (cluster_offset >> 9) + n_start, n, &qiov);
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
+    PERF_TIMER_STOP(qcow2_copy_sectors_write, 0);
     if (ret < 0) {
         goto out;
     }
@@ -745,11 +764,13 @@ static int perform_cow(BlockDriverState *bs, QCowL2Meta *m, Qcow2COWRegion *r)
         return 0;
     }
 
+    enum WhoHoldsLock whl = s->whl;
     qemu_co_mutex_unlock(&s->lock);
     ret = copy_sectors(bs, m->offset / BDRV_SECTOR_SIZE, m->alloc_offset,
                        r->offset / BDRV_SECTOR_SIZE,
                        r->offset / BDRV_SECTOR_SIZE + r->nb_sectors);
     qemu_co_mutex_lock(&s->lock);
+    s->whl = whl;
 
     if (ret < 0) {
         return ret;
@@ -929,9 +950,11 @@ static int handle_dependencies(BlockDriverState *bs, uint64_t guest_offset,
             if (bytes == 0) {
                 /* Wait for the dependency to complete. We need to recheck
                  * the free/allocated clusters when we continue. */
+                enum WhoHoldsLock whl = s->whl;
                 qemu_co_mutex_unlock(&s->lock);
                 qemu_co_queue_wait(&old_alloc->dependent_requests);
                 qemu_co_mutex_lock(&s->lock);
+                s->whl = whl;
                 return -EAGAIN;
             }
         }
@@ -1281,6 +1304,8 @@ int qcow2_alloc_cluster_offset(BlockDriverState *bs, uint64_t offset,
     uint64_t cluster_offset;
     uint64_t cur_bytes;
     int ret;
+    static PERF_TIMER(qcow2_alloc_deps);
+    static PERF_TIMER(qcow2_alloc_copied);
 
     trace_qcow2_alloc_clusters_offset(qemu_coroutine_self(), offset, *num);
 
@@ -1330,7 +1355,9 @@ again:
          *         the right synchronisation between the in-flight request and
          *         the new one.
          */
+        PERF_TIMER_START(qcow2_alloc_deps, 0);
         ret = handle_dependencies(bs, start, &cur_bytes, m);
+        PERF_TIMER_STOP(qcow2_alloc_deps, 0);
         if (ret == -EAGAIN) {
             /* Currently handle_dependencies() doesn't yield if we already had
              * an allocation. If it did, we would have to clean up the L2Meta
@@ -1350,7 +1377,9 @@ again:
         /*
          * 2. Count contiguous COPIED clusters.
          */
+        PERF_TIMER_START(qcow2_alloc_copied, 0);
         ret = handle_copied(bs, start, &cluster_offset, &cur_bytes, m);
+        PERF_TIMER_STOP(qcow2_alloc_copied, 0);
         if (ret < 0) {
             return ret;
         } else if (ret) {
@@ -1759,8 +1788,12 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
                 goto fail;
             }
 
+            PERF_TIMER_START(qcow2_sub_write, 0);
+            PERF_TIMER_START(qcow2_sub_data_write, 0);
             ret = bdrv_write_zeroes(bs->file, offset / BDRV_SECTOR_SIZE,
                                     s->cluster_sectors, 0);
+            PERF_TIMER_STOP(qcow2_sub_write, 0);
+            PERF_TIMER_STOP(qcow2_sub_data_write, 0);
             if (ret < 0) {
                 if (!preallocated) {
                     qcow2_free_clusters(bs, offset, s->cluster_size,
@@ -1792,8 +1825,10 @@ static int expand_zero_clusters_in_l1(BlockDriverState *bs, uint64_t *l1_table,
                     goto fail;
                 }
 
+                PERF_TIMER_START(qcow2_sub_write, 0);
                 ret = bdrv_write(bs->file, l2_offset / BDRV_SECTOR_SIZE,
                         (void *)l2_table, s->cluster_sectors);
+                PERF_TIMER_STOP(qcow2_sub_write, 0);
                 if (ret < 0) {
                     goto fail;
                 }

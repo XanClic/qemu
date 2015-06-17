@@ -26,6 +26,10 @@
 #include "block/block_int.h"
 #include "block/qcow2.h"
 #include "qemu/range.h"
+#include "perf-test.h"
+
+EXTERN_PERF_TIMER(qcow2_sub_write);
+EXTERN_PERF_TIMER(qcow2_sub_sync_write);
 
 static int64_t alloc_clusters_noref(BlockDriverState *bs, uint64_t size);
 static int QEMU_WARN_UNUSED_RESULT update_refcount(BlockDriverState *bs,
@@ -439,9 +443,11 @@ static int alloc_refcount_block(BlockDriverState *bs,
     if (refcount_table_index < s->refcount_table_size) {
         uint64_t data64 = cpu_to_be64(new_block);
         BLKDBG_EVENT(bs->file, BLKDBG_REFBLOCK_ALLOC_HOOKUP);
+        PERF_TIMER_START(qcow2_sub_sync_write, 0);
         ret = bdrv_pwrite_sync(bs->file,
             s->refcount_table_offset + refcount_table_index * sizeof(uint64_t),
             &data64, sizeof(data64));
+        PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
         if (ret < 0) {
             goto fail_block;
         }
@@ -545,8 +551,10 @@ static int alloc_refcount_block(BlockDriverState *bs,
 
     /* Write refcount blocks to disk */
     BLKDBG_EVENT(bs->file, BLKDBG_REFBLOCK_ALLOC_WRITE_BLOCKS);
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, meta_offset, new_blocks,
         blocks_clusters * s->cluster_size);
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     g_free(new_blocks);
     new_blocks = NULL;
     if (ret < 0) {
@@ -559,8 +567,10 @@ static int alloc_refcount_block(BlockDriverState *bs,
     }
 
     BLKDBG_EVENT(bs->file, BLKDBG_REFBLOCK_ALLOC_WRITE_TABLE);
+    PERF_TIMER_COUNTER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, table_offset, new_table,
         table_size * sizeof(uint64_t));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         goto fail_table;
     }
@@ -574,8 +584,10 @@ static int alloc_refcount_block(BlockDriverState *bs,
     cpu_to_be64w((uint64_t*)data, table_offset);
     cpu_to_be32w((uint32_t*)(data + 8), table_clusters);
     BLKDBG_EVENT(bs->file, BLKDBG_REFBLOCK_ALLOC_SWITCH_TABLE);
+    PERF_TIMER_COUNTER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, offsetof(QCowHeader, refcount_table_offset),
         data, sizeof(data));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         goto fail_table;
     }
@@ -1265,7 +1277,9 @@ fail:
             cpu_to_be64s(&l1_table[i]);
         }
 
+        PERF_TIMER_START(qcow2_sub_sync_write, 0);
         ret = bdrv_pwrite_sync(bs->file, l1_table_offset, l1_table, l1_size2);
+        PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
 
         for (i = 0; i < l1_size; i++) {
             be64_to_cpus(&l1_table[i]);
@@ -1698,7 +1712,9 @@ static int check_oflag_copied(BlockDriverState *bs, BdrvCheckResult *res,
                 goto fail;
             }
 
+            PERF_TIMER_START(qcow2_sub_write, 0);
             ret = bdrv_pwrite(bs->file, l2_offset, l2_table, s->cluster_size);
+            PERF_TIMER_STOP(qcow2_sub_write, 0);
             if (ret < 0) {
                 fprintf(stderr, "ERROR: Could not write L2 table: %s\n",
                         strerror(-ret));
@@ -2131,8 +2147,10 @@ write_refblocks:
         on_disk_refblock = (void *)((char *) *refcount_table +
                                     refblock_index * s->cluster_size);
 
+        PERF_TIMER_START(qcow2_sub_write, 0);
         ret = bdrv_write(bs->file, refblock_offset / BDRV_SECTOR_SIZE,
                          on_disk_refblock, s->cluster_sectors);
+        PERF_TIMER_STOP(qcow2_sub_write, 0);
         if (ret < 0) {
             fprintf(stderr, "ERROR writing refblock: %s\n", strerror(-ret));
             goto fail;
@@ -2180,8 +2198,10 @@ write_refblocks:
     }
 
     assert(reftable_size < INT_MAX / sizeof(uint64_t));
+    PERF_TIMER_START(qcow2_sub_write, 0);
     ret = bdrv_pwrite(bs->file, reftable_offset, on_disk_reftable,
                       reftable_size * sizeof(uint64_t));
+    PERF_TIMER_STOP(qcow2_sub_write, 0);
     if (ret < 0) {
         fprintf(stderr, "ERROR writing reftable: %s\n", strerror(-ret));
         goto fail;
@@ -2192,10 +2212,12 @@ write_refblocks:
                  reftable_offset);
     cpu_to_be32w(&reftable_offset_and_clusters.reftable_clusters,
                  size_to_clusters(s, reftable_size * sizeof(uint64_t)));
+    PERF_TIMER_START(qcow2_sub_sync_write, 0);
     ret = bdrv_pwrite_sync(bs->file, offsetof(QCowHeader,
                                               refcount_table_offset),
                            &reftable_offset_and_clusters,
                            sizeof(reftable_offset_and_clusters));
+    PERF_TIMER_STOP(qcow2_sub_sync_write, 0);
     if (ret < 0) {
         fprintf(stderr, "ERROR setting reftable: %s\n", strerror(-ret));
         goto fail;
