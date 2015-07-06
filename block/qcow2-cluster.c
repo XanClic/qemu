@@ -409,12 +409,14 @@ int qcow2_encrypt_sectors(BDRVQcowState *s, int64_t sector_num,
 static int coroutine_fn copy_sectors(BlockDriverState *bs,
                                      uint64_t start_sect,
                                      uint64_t cluster_offset,
-                                     int n_start, int n_end)
+                                     int n_start, int n_end,
+                                     bool zero_cow)
 {
     BDRVQcowState *s = bs->opaque;
     QEMUIOVector qiov;
     struct iovec iov;
-    int n, ret;
+    int n, ret = 0;
+    bool is_zero = false, must_write = true;
     static PERF_TIMER(qcow2_copy_sectors_read);
     static PERF_TIMER(qcow2_copy_sectors_write);
 
@@ -423,13 +425,22 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
         return 0;
     }
 
-    iov.iov_len = n * BDRV_SECTOR_SIZE;
-    iov.iov_base = qemu_try_blockalign(bs, iov.iov_len);
-    if (iov.iov_base == NULL) {
-        return -ENOMEM;
-    }
+    if (zero_cow && !bs->encrypted) {
+        iov.iov_len = 0;
+        iov.iov_base = NULL;
+    } else {
+        iov.iov_len = n * BDRV_SECTOR_SIZE;
+        if (zero_cow) {
+            iov.iov_base = qemu_try_blockalign0(bs, iov.iov_len);
+        } else {
+            iov.iov_base = qemu_try_blockalign(bs, iov.iov_len);
+        }
+        if (iov.iov_base == NULL) {
+            return -ENOMEM;
+        }
 
-    qemu_iovec_init_external(&qiov, &iov, 1);
+        qemu_iovec_init_external(&qiov, &iov, 1);
+    }
 
     BLKDBG_EVENT(bs->file, BLKDBG_COW_READ);
 
@@ -443,7 +454,12 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
      * which can lead to deadlock when block layer copy-on-read is enabled.
      */
     PERF_TIMER_START(qcow2_copy_sectors_read, 0);
-    ret = bs->drv->bdrv_co_readv(bs, start_sect + n_start, n, &qiov);
+    if (zero_cow) {
+        is_zero = true;
+    } else {
+        ret = bs->drv->bdrv_co_readv(bs, start_sect + n_start, n, &qiov);
+        is_zero = buffer_is_zero(iov.iov_base, iov.iov_len);
+    }
     PERF_TIMER_STOP(qcow2_copy_sectors_read, 0);
     if (ret < 0) {
         goto out;
@@ -459,6 +475,7 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
             error_free(err);
             goto out;
         }
+        is_zero = false;
     }
 
     ret = qcow2_pre_write_overlap_check(bs, 0,
@@ -470,7 +487,37 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
     BLKDBG_EVENT(bs->file, BLKDBG_COW_WRITE);
     PERF_TIMER_START(qcow2_sub_write, 0);
     PERF_TIMER_START(qcow2_copy_sectors_write, 0);
-    ret = bdrv_co_writev(bs->file, (cluster_offset >> 9) + n_start, n, &qiov);
+    must_write = !is_zero;
+    if (!must_write) {
+        must_write = !bdrv_has_zero_init(bs->file);
+    }
+    if (!must_write) {
+        uint64_t start_sector, end_sector;
+        int pnum;
+
+        start_sector = (cluster_offset >> 9) + n_start;
+        end_sector = start_sector + n;
+
+        while (!must_write && start_sector < end_sector && pnum) {
+            ret = bdrv_get_block_status(bs->file, start_sector,
+                                        end_sector - start_sector, &pnum);
+            must_write = ret < 0
+                         || (ret & BDRV_BLOCK_DATA)
+                         || ((!pnum || !(ret & BDRV_BLOCK_ALLOCATED))
+                             && bs->file->backing_hd);
+            start_sector += pnum;
+        }
+    }
+    if (must_write) {
+        if (is_zero) {
+            ret = bdrv_co_write_zeroes(bs->file,
+                                       (cluster_offset >> 9) + n_start, n,
+                                       BDRV_REQ_MAY_UNMAP);
+        } else {
+            ret = bdrv_co_writev(bs->file, (cluster_offset >> 9) + n_start, n,
+                                 &qiov);
+        }
+    }
     PERF_TIMER_STOP(qcow2_sub_write, 0);
     PERF_TIMER_STOP(qcow2_copy_sectors_write, 0);
     if (ret < 0) {
@@ -768,7 +815,8 @@ static int perform_cow(BlockDriverState *bs, QCowL2Meta *m, Qcow2COWRegion *r)
     qemu_co_mutex_unlock(&s->lock);
     ret = copy_sectors(bs, m->offset / BDRV_SECTOR_SIZE, m->alloc_offset,
                        r->offset / BDRV_SECTOR_SIZE,
-                       r->offset / BDRV_SECTOR_SIZE + r->nb_sectors);
+                       r->offset / BDRV_SECTOR_SIZE + r->nb_sectors,
+                       r->zero_cow);
     qemu_co_mutex_lock(&s->lock);
     s->whl = whl;
 
@@ -871,10 +919,12 @@ err:
  * write, but require COW to be performed (this includes yet unallocated space,
  * which must copy from the backing file)
  */
-static int count_cow_clusters(BDRVQcowState *s, int nb_clusters,
-    uint64_t *l2_table, int l2_index)
+static int count_cow_clusters(BlockDriverState *bs, int nb_clusters,
+                              uint64_t *l2_table, int l2_index, bool *zero_cow)
 {
     int i;
+
+    *zero_cow = true;
 
     for (i = 0; i < nb_clusters; i++) {
         uint64_t l2_entry = be64_to_cpu(l2_table[l2_index + i]);
@@ -885,11 +935,20 @@ static int count_cow_clusters(BDRVQcowState *s, int nb_clusters,
             if (l2_entry & QCOW_OFLAG_COPIED) {
                 goto out;
             }
+            *zero_cow = false;
             break;
+
         case QCOW2_CLUSTER_UNALLOCATED:
+            *zero_cow &= !bs->backing_hd;
+            break;
+
         case QCOW2_CLUSTER_COMPRESSED:
+            *zero_cow = false;
+            break;
+
         case QCOW2_CLUSTER_ZERO:
             break;
+
         default:
             abort();
         }
@@ -1152,6 +1211,7 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
     uint64_t *l2_table;
     uint64_t entry;
     unsigned int nb_clusters;
+    bool zero_cow;
     int ret;
 
     uint64_t alloc_cluster_offset;
@@ -1181,8 +1241,10 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
     /* For the moment, overwrite compressed clusters one by one */
     if (entry & QCOW_OFLAG_COMPRESSED) {
         nb_clusters = 1;
+        zero_cow = false;
     } else {
-        nb_clusters = count_cow_clusters(s, nb_clusters, l2_table, l2_index);
+        nb_clusters = count_cow_clusters(bs, nb_clusters, l2_table, l2_index,
+                                         &zero_cow);
     }
 
     /* This function is only called when there were no non-COW clusters, so if
@@ -1254,10 +1316,12 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
         .cow_start = {
             .offset     = 0,
             .nb_sectors = alloc_n_start,
+            .zero_cow   = zero_cow,
         },
         .cow_end = {
             .offset     = nb_sectors * BDRV_SECTOR_SIZE,
             .nb_sectors = avail_sectors - nb_sectors,
+            .zero_cow   = zero_cow,
         },
     };
     qemu_co_queue_init(&(*m)->dependent_requests);
