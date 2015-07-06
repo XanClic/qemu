@@ -385,25 +385,36 @@ int qcow2_encrypt_sectors(BDRVQcowState *s, int64_t sector_num,
 static int coroutine_fn copy_sectors(BlockDriverState *bs,
                                      uint64_t start_sect,
                                      uint64_t cluster_offset,
-                                     int n_start, int n_end)
+                                     int n_start, int n_end,
+                                     bool zero_cow)
 {
     BDRVQcowState *s = bs->opaque;
     QEMUIOVector qiov;
     struct iovec iov;
-    int n, ret;
+    int n, ret = 0;
+    bool is_zero = false, must_write = true;
 
     n = n_end - n_start;
     if (n <= 0) {
         return 0;
     }
 
-    iov.iov_len = n * BDRV_SECTOR_SIZE;
-    iov.iov_base = qemu_try_blockalign(bs, iov.iov_len);
-    if (iov.iov_base == NULL) {
-        return -ENOMEM;
-    }
+    if (zero_cow && !bs->encrypted) {
+        iov.iov_len = 0;
+        iov.iov_base = NULL;
+    } else {
+        iov.iov_len = n * BDRV_SECTOR_SIZE;
+        if (zero_cow) {
+            iov.iov_base = qemu_try_blockalign0(bs, iov.iov_len);
+        } else {
+            iov.iov_base = qemu_try_blockalign(bs, iov.iov_len);
+        }
+        if (iov.iov_base == NULL) {
+            return -ENOMEM;
+        }
 
-    qemu_iovec_init_external(&qiov, &iov, 1);
+        qemu_iovec_init_external(&qiov, &iov, 1);
+    }
 
     BLKDBG_EVENT(bs->file, BLKDBG_COW_READ);
 
@@ -412,11 +423,16 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
         goto out;
     }
 
-    /* Call .bdrv_co_readv() directly instead of using the public block-layer
-     * interface.  This avoids double I/O throttling and request tracking,
-     * which can lead to deadlock when block layer copy-on-read is enabled.
-     */
-    ret = bs->drv->bdrv_co_readv(bs, start_sect + n_start, n, &qiov);
+    if (zero_cow) {
+        is_zero = true;
+    } else {
+        /* Call .bdrv_co_readv() directly instead of using the public
+         * block-layer interface.  This avoids double I/O throttling and
+         * request tracking, which can lead to deadlock when block layer
+         * copy-on-read is enabled. */
+        ret = bs->drv->bdrv_co_readv(bs, start_sect + n_start, n, &qiov);
+        is_zero = buffer_is_zero(iov.iov_base, iov.iov_len);
+    }
     if (ret < 0) {
         goto out;
     }
@@ -431,6 +447,9 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
             error_free(err);
             goto out;
         }
+        /* buffer_is_zero() being true is very unlikely here
+         * (whereas the guest data being zero is much more likely) */
+        is_zero = false;
     }
 
     ret = qcow2_pre_write_overlap_check(bs, 0,
@@ -440,7 +459,37 @@ static int coroutine_fn copy_sectors(BlockDriverState *bs,
     }
 
     BLKDBG_EVENT(bs->file, BLKDBG_COW_WRITE);
-    ret = bdrv_co_writev(bs->file, (cluster_offset >> 9) + n_start, n, &qiov);
+    must_write = !is_zero;
+    if (!must_write) {
+        must_write = !bdrv_has_zero_init(bs->file);
+    }
+    if (!must_write) {
+        uint64_t start_sector, end_sector;
+        int pnum;
+
+        start_sector = (cluster_offset >> 9) + n_start;
+        end_sector = start_sector + n;
+
+        while (!must_write && start_sector < end_sector && pnum) {
+            ret = bdrv_get_block_status(bs->file, start_sector,
+                                        end_sector - start_sector, &pnum);
+            must_write = ret < 0
+                         || (ret & BDRV_BLOCK_DATA)
+                         || ((!pnum || !(ret & BDRV_BLOCK_ALLOCATED))
+                             && bs->file->backing_hd);
+            start_sector += pnum;
+        }
+    }
+    if (must_write) {
+        if (is_zero) {
+            ret = bdrv_co_write_zeroes(bs->file,
+                                       (cluster_offset >> 9) + n_start, n,
+                                       BDRV_REQ_MAY_UNMAP);
+        } else {
+            ret = bdrv_co_writev(bs->file, (cluster_offset >> 9) + n_start, n,
+                                 &qiov);
+        }
+    }
     if (ret < 0) {
         goto out;
     }
@@ -735,7 +784,8 @@ static int perform_cow(BlockDriverState *bs, QCowL2Meta *m, Qcow2COWRegion *r)
     qemu_co_mutex_unlock(&s->lock);
     ret = copy_sectors(bs, m->offset / BDRV_SECTOR_SIZE, m->alloc_offset,
                        r->offset / BDRV_SECTOR_SIZE,
-                       r->offset / BDRV_SECTOR_SIZE + r->nb_sectors);
+                       r->offset / BDRV_SECTOR_SIZE + r->nb_sectors,
+                       r->zero_cow);
     qemu_co_mutex_lock(&s->lock);
 
     if (ret < 0) {
@@ -864,6 +914,24 @@ static int count_cow_clusters(BDRVQcowState *s, int nb_clusters,
 out:
     assert(i <= nb_clusters);
     return i;
+}
+
+static bool cluster_reads_as_zero(BlockDriverState *bs, uint64_t l2_entry)
+{
+    switch (qcow2_get_cluster_type(l2_entry)) {
+    case QCOW2_CLUSTER_NORMAL:
+    case QCOW2_CLUSTER_COMPRESSED:
+        return false;
+
+    case QCOW2_CLUSTER_UNALLOCATED:
+        return !bs->backing_hd;
+
+    case QCOW2_CLUSTER_ZERO:
+        return true;
+
+    default:
+        abort();
+    }
 }
 
 /*
@@ -1113,11 +1181,11 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
 {
     BDRVQcowState *s = bs->opaque;
     int l2_index;
-    uint64_t *l2_table;
-    uint64_t entry;
+    uint64_t *l2_table = NULL;
+    uint64_t first_entry, last_entry;
     unsigned int nb_clusters;
     int ret;
-
+    bool first_cluster_zero, last_cluster_zero;
     uint64_t alloc_cluster_offset;
 
     trace_qcow2_handle_alloc(qemu_coroutine_self(), guest_offset, *host_offset,
@@ -1140,10 +1208,10 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
         return ret;
     }
 
-    entry = be64_to_cpu(l2_table[l2_index]);
+    first_entry = be64_to_cpu(l2_table[l2_index]);
 
     /* For the moment, overwrite compressed clusters one by one */
-    if (entry & QCOW_OFLAG_COMPRESSED) {
+    if (first_entry & QCOW_OFLAG_COMPRESSED) {
         nb_clusters = 1;
     } else {
         nb_clusters = count_cow_clusters(s, nb_clusters, l2_table, l2_index);
@@ -1153,8 +1221,6 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
      * we can't find any unallocated or COW clusters either, something is
      * wrong with our code. */
     assert(nb_clusters > 0);
-
-    qcow2_cache_put(bs, s->l2_table_cache, (void **) &l2_table);
 
     /* Allocate, if necessary at a given offset in the image file */
     alloc_cluster_offset = start_of_cluster(s, *host_offset);
@@ -1167,8 +1233,19 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
     /* Can't extend contiguous allocation */
     if (nb_clusters == 0) {
         *bytes = 0;
-        return 0;
+        ret = 0;
+        goto fail;
     }
+
+    /* Only the first and the last cluster are copied, the rest is completely
+     * overwritten; therefore, when determining whether cow_start and cow_end
+     * in QCowL2Meta are zero, we only need to look at the first and last
+     * cluster, respectively. */
+    last_entry = be64_to_cpu(l2_table[l2_index + nb_clusters - 1]);
+    first_cluster_zero = cluster_reads_as_zero(bs, first_entry);
+    last_cluster_zero  = cluster_reads_as_zero(bs, last_entry);
+
+    qcow2_cache_put(bs, s->l2_table_cache, (void **) &l2_table);
 
     /* !*host_offset would overwrite the image header and is reserved for "no
      * host offset preferred". If 0 was a valid host offset, it'd trigger the
@@ -1218,10 +1295,12 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
         .cow_start = {
             .offset     = 0,
             .nb_sectors = alloc_n_start,
+            .zero_cow   = first_cluster_zero,
         },
         .cow_end = {
             .offset     = nb_sectors * BDRV_SECTOR_SIZE,
             .nb_sectors = avail_sectors - nb_sectors,
+            .zero_cow   = last_cluster_zero,
         },
     };
     qemu_co_queue_init(&(*m)->dependent_requests);
@@ -1237,6 +1316,9 @@ static int handle_alloc(BlockDriverState *bs, uint64_t guest_offset,
 fail:
     if (*m && (*m)->nb_clusters > 0) {
         QLIST_REMOVE(*m, next_in_flight);
+    }
+    if (l2_table) {
+        qcow2_cache_put(bs, s->l2_table_cache, (void **) &l2_table);
     }
     return ret;
 }

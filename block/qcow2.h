@@ -303,6 +303,9 @@ typedef struct Qcow2COWRegion {
 
     /** Number of sectors to copy */
     int         nb_sectors;
+
+    /** Set if this region is completely zero */
+    bool        zero_cow;
 } Qcow2COWRegion;
 
 /**
