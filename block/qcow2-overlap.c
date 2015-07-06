@@ -471,6 +471,10 @@ int qcow2_check_metadata_overlap(BlockDriverState *bs, int ign, int64_t offset,
     uint64_t current_cluster;
     int ret = 0;
 
+    if (!s->metadata_list) {
+        return 0;
+    }
+
     for (current_cluster = start_cluster; current_cluster < end_cluster;
          current_cluster++)
     {
