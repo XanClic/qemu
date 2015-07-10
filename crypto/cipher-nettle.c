@@ -33,34 +33,21 @@ typedef const void * cipher_ctx_t;
 typedef size_t       cipher_length_t;
 #endif
 
-nettle_cipher_func aes_encrypt_wrapper;
-nettle_cipher_func aes_decrypt_wrapper;
-nettle_cipher_func des_encrypt_wrapper;
-nettle_cipher_func des_decrypt_wrapper;
+#define WRAP(cipher) \
+    nettle_cipher_func cipher##_wrapper; \
+    void cipher##_wrapper(cipher_ctx_t ctx, cipher_length_t length, \
+                          uint8_t *dst, const uint8_t *src) \
+    { \
+        cipher(ctx, length, dst, src); \
+    }
 
-void aes_encrypt_wrapper(cipher_ctx_t ctx, cipher_length_t length,
-                         uint8_t *dst, const uint8_t *src)
-{
-    aes_encrypt(ctx, length, dst, src);
-}
+#define WRAPPED(cipher) \
+    cipher##_wrapper
 
-void aes_decrypt_wrapper(cipher_ctx_t ctx, cipher_length_t length,
-                         uint8_t *dst, const uint8_t *src)
-{
-    aes_encrypt(ctx, length, dst, src);
-}
-
-void des_encrypt_wrapper(cipher_ctx_t ctx, cipher_length_t length,
-                         uint8_t *dst, const uint8_t *src)
-{
-    des_encrypt(ctx, length, dst, src);
-}
-
-void des_decrypt_wrapper(cipher_ctx_t ctx, cipher_length_t length,
-                         uint8_t *dst, const uint8_t *src)
-{
-    des_decrypt(ctx, length, dst, src);
-}
+WRAP(aes_encrypt)
+WRAP(aes_decrypt)
+WRAP(des_encrypt)
+WRAP(des_decrypt)
 
 typedef struct QCryptoCipherNettle QCryptoCipherNettle;
 struct QCryptoCipherNettle {
@@ -122,8 +109,8 @@ QCryptoCipher *qcrypto_cipher_new(QCryptoCipherAlgorithm alg,
         des_set_key(ctx->ctx_encrypt, rfbkey);
         g_free(rfbkey);
 
-        ctx->alg_encrypt = des_encrypt_wrapper;
-        ctx->alg_decrypt = des_decrypt_wrapper;
+        ctx->alg_encrypt = WRAPPED(des_encrypt);
+        ctx->alg_decrypt = WRAPPED(des_decrypt);
 
         ctx->niv = DES_BLOCK_SIZE;
         break;
@@ -137,8 +124,8 @@ QCryptoCipher *qcrypto_cipher_new(QCryptoCipherAlgorithm alg,
         aes_set_encrypt_key(ctx->ctx_encrypt, nkey, key);
         aes_set_decrypt_key(ctx->ctx_decrypt, nkey, key);
 
-        ctx->alg_encrypt = aes_encrypt_wrapper;
-        ctx->alg_decrypt = aes_decrypt_wrapper;
+        ctx->alg_encrypt = WRAPPED(aes_encrypt);
+        ctx->alg_decrypt = WRAPPED(aes_decrypt);
 
         ctx->niv = AES_BLOCK_SIZE;
         break;
