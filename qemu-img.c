@@ -2155,7 +2155,7 @@ static void dump_map_entry(OutputFormat output_format, MapEntry *e,
         }
         if ((e->flags & (BDRV_BLOCK_DATA|BDRV_BLOCK_ZERO)) == BDRV_BLOCK_DATA) {
             printf("%#-16"PRIx64"%#-16"PRIx64"%#-16"PRIx64"%s\n",
-                   e->start, e->length, e->offset, e->bs->filename);
+                   e->start, e->length, e->offset, e->bs->exact_filename);
         }
         /* This format ignores the distinction between 0, ZERO and ZERO|DATA.
          * Modify the flags here to allow more coalescing.
