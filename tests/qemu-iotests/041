@@ -18,6 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+import json
 import time
 import os
 import iotests
@@ -908,10 +909,18 @@ class TestRepairQuorum(iotests.QMPTestCase):
         self.assert_qmp(result, 'return', {})
 
         self.complete_and_wait(drive="quorum0")
-        result = self.vm.qmp('query-named-block-nodes')
-        self.assert_qmp(result, 'return[0]/file', quorum_repair_img)
-        # TODO: a better test requiring some QEMU infrastructure will be added
-        #       to check that this file is really driven by quorum
+
+        result = self.vm.qmp('query-block')
+        for blockdev in result['return']:
+            if blockdev['device'] == 'quorum0':
+                filename = blockdev['inserted']['image']['filename']
+                self.assertEquals(filename[:5], 'json:')
+                children = json.loads(filename[5:])['children']
+                self.assertEquals(children[0]['file']['filename'], quorum_img1)
+                self.assertEquals(children[1]['file']['filename'],
+                                  quorum_repair_img)
+                self.assertEquals(children[2]['file']['filename'], quorum_img3)
+
         self.vm.shutdown()
 
 if __name__ == '__main__':
