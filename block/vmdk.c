@@ -444,9 +444,11 @@ static int vmdk_init_tables(BlockDriverState *bs, VmdkExtent *extent,
                      extent->l1_table,
                      l1_size);
     if (ret < 0) {
+        char *extent_filename = bdrv_filename_alloc(extent->file);
         error_setg_errno(errp, -ret,
                          "Could not read l1 table from extent '%s'",
-                         extent->file->filename);
+                         extent_filename);
+        g_free(extent_filename);
         goto fail_l1;
     }
     for (i = 0; i < extent->l1_size; i++) {
@@ -464,9 +466,11 @@ static int vmdk_init_tables(BlockDriverState *bs, VmdkExtent *extent,
                          extent->l1_backup_table,
                          l1_size);
         if (ret < 0) {
+            char *extent_filename = bdrv_filename_alloc(extent->file);
             error_setg_errno(errp, -ret,
                              "Could not read l1 backup table from extent '%s'",
-                             extent->file->filename);
+                             extent_filename);
+            g_free(extent_filename);
             goto fail_l1b;
         }
         for (i = 0; i < extent->l1_size; i++) {
@@ -495,9 +499,11 @@ static int vmdk_open_vmfs_sparse(BlockDriverState *bs,
 
     ret = bdrv_pread(file, sizeof(magic), &header, sizeof(header));
     if (ret < 0) {
+        char *filename = bdrv_filename_alloc(file);
         error_setg_errno(errp, -ret,
                          "Could not read header from file '%s'",
-                         file->filename);
+                         filename);
+        g_free(filename);
         return ret;
     }
     ret = vmdk_add_extent(bs, file, false,
@@ -572,9 +578,11 @@ static int vmdk_open_vmdk4(BlockDriverState *bs,
 
     ret = bdrv_pread(file, sizeof(magic), &header, sizeof(header));
     if (ret < 0) {
+        char *filename = bdrv_filename_alloc(file);
         error_setg_errno(errp, -ret,
                          "Could not read header from file '%s'",
-                         file->filename);
+                         filename);
+        g_free(filename);
         return -EINVAL;
     }
     if (header.capacity == 0) {
@@ -818,8 +826,10 @@ static int vmdk_parse_extents(const char *desc, BlockDriverState *bs,
         if (!path_is_absolute(fname) && !path_has_protocol(fname) &&
             !desc_file_path[0])
         {
+            char *filename = bdrv_filename_alloc(bs->file);
             error_setg(errp, "Cannot use relative extent paths with VMDK "
-                       "descriptor file '%s'", bs->file->filename);
+                       "descriptor file '%s'", filename);
+            g_free(filename);
             return -EINVAL;
         }
 
@@ -2086,7 +2096,7 @@ static ImageInfo *vmdk_get_extent_info(VmdkExtent *extent)
     ImageInfo *info = g_new0(ImageInfo, 1);
 
     *info = (ImageInfo){
-        .filename         = g_strdup(extent->file->filename),
+        .filename         = bdrv_filename_alloc(extent->file),
         .format           = g_strdup(extent->type),
         .virtual_size     = extent->sectors * BDRV_SECTOR_SIZE,
         .compressed       = extent->compressed,

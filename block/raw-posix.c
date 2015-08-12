@@ -512,12 +512,14 @@ static int raw_open_common(BlockDriverState *bs, QDict *options,
         goto fail;
     }
     if (!s->use_aio && (bdrv_flags & BDRV_O_NATIVE_AIO)) {
+        char *filename = bdrv_filename_alloc(bs);
         error_printf("WARNING: aio=native was specified for '%s', but "
                      "it requires cache.direct=on, which was not "
                      "specified. Falling back to aio=threads.\n"
                      "         This will become an error condition in "
                      "future QEMU versions.\n",
-                     bs->filename);
+                     filename);
+        g_free(filename);
     }
 #endif
 
@@ -2100,9 +2102,13 @@ static bool hdev_is_sg(BlockDriverState *bs)
 
     struct stat st;
     struct sg_scsi_id scsiid;
-    int sg_version;
+    int sg_version, ret;
+    char *filename = bdrv_filename_alloc(bs);
 
-    if (stat(bs->filename, &st) >= 0 && S_ISCHR(st.st_mode) &&
+    ret = stat(filename, &st);
+    g_free(filename);
+
+    if (ret >= 0 && S_ISCHR(st.st_mode) &&
         !bdrv_ioctl(bs, SG_GET_VERSION_NUM, &sg_version) &&
         !bdrv_ioctl(bs, SG_GET_SCSI_ID, &scsiid)) {
         DPRINTF("SG device found: type=%d, version=%d\n",

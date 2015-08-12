@@ -781,25 +781,33 @@ void commit_active_start(BlockDriverState *bs, BlockDriverState *base,
 
     length = bdrv_getlength(bs);
     if (length < 0) {
-        error_setg_errno(errp, -length,
-                         "Unable to determine length of %s", bs->filename);
+        char *filename = bdrv_filename_alloc(bs);
+        error_setg_errno(errp, -length, "Unable to determine length of %s",
+                         filename);
+        g_free(filename);
         goto error_restore_flags;
     }
 
     base_length = bdrv_getlength(base);
     if (base_length < 0) {
+        char *base_filename = bdrv_filename_alloc(base);
         error_setg_errno(errp, -base_length,
-                         "Unable to determine length of %s", base->filename);
+                         "Unable to determine length of %s", base_filename);
+        g_free(base_filename);
         goto error_restore_flags;
     }
 
     if (length > base_length) {
         ret = bdrv_truncate(base, length);
         if (ret < 0) {
+            char *filename = bdrv_filename_alloc(bs);
+            char *base_filename = bdrv_filename_alloc(base);
             error_setg_errno(errp, -ret,
                             "Top image %s is larger than base image %s, and "
                              "resize of base image failed",
-                             bs->filename, base->filename);
+                             filename, base_filename);
+            g_free(filename);
+            g_free(base_filename);
             goto error_restore_flags;
         }
     }

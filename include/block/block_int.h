@@ -370,7 +370,6 @@ struct BlockDriverState {
      * regarding this BDS's context */
     QLIST_HEAD(, BdrvAioNotifier) aio_notifiers;
 
-    char filename[PATH_MAX];
     char backing_file[PATH_MAX]; /* if non zero, the image is a diff of
                                     this file image */
     char backing_format[16]; /* if non-zero and backing_file exists */
