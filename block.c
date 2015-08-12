@@ -2760,10 +2760,13 @@ void bdrv_add_key(BlockDriverState *bs, const char *key, Error **errp)
         }
     } else {
         if (bdrv_key_required(bs)) {
+            char *enc_filename = g_malloc(PATH_MAX);
+            bdrv_get_encrypted_filename(bs, enc_filename, PATH_MAX);
             error_set(errp, ERROR_CLASS_DEVICE_ENCRYPTED,
                       "'%s' (%s) is encrypted",
                       bdrv_get_device_or_node_name(bs),
-                      bdrv_get_encrypted_filename(bs));
+                      enc_filename);
+            g_free(enc_filename);
         }
     }
 }
@@ -2980,14 +2983,22 @@ bool bdrv_can_write_zeroes_with_unmap(BlockDriverState *bs)
     return false;
 }
 
-const char *bdrv_get_encrypted_filename(BlockDriverState *bs)
+char *bdrv_get_encrypted_filename(BlockDriverState *bs, char *dest, size_t sz)
 {
-    if (bs->backing_hd && bs->backing_hd->encrypted)
-        return bs->backing_file;
-    else if (bs->encrypted)
-        return bs->filename;
-    else
+    if (sz > INT_MAX) {
+        sz = INT_MAX;
+    }
+
+    if (bs->backing_hd && bs->backing_hd->encrypted) {
+        pstrcpy(dest, sz, bs->backing_file);
+        return dest;
+    } else if (bs->encrypted) {
+        pstrcpy(dest, sz, bs->filename);
+        return dest;
+    } else {
+        dest[0] = '\0';
         return NULL;
+    }
 }
 
 void bdrv_get_backing_filename(BlockDriverState *bs,
