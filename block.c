@@ -1559,7 +1559,7 @@ static int bdrv_open_inherit(BlockDriverState **pbs, const char *filename,
         }
     }
 
-    bdrv_refresh_filename(bs);
+    bdrv_filename(bs, bs->filename, sizeof(bs->filename));
 
     /* For snapshot=on, create a temporary qcow2 overlay. bs points to the
      * temporary snapshot afterwards. */
@@ -4153,9 +4153,6 @@ static bool append_open_options(QDict *d, BlockDriverState *bs)
  *  - full_open_options: Options which, when given when opening a block device
  *                       (without a filename), result in a BDS (mostly)
  *                       equalling the given one
- *  - filename: If exact_filename is set, it is copied here. Otherwise,
- *              full_open_options is converted to a JSON object, prefixed with
- *              "json:" (for use through the JSON pseudo protocol) and put here.
  */
 void bdrv_refresh_filename(BlockDriverState *bs)
 {
@@ -4242,15 +4239,43 @@ void bdrv_refresh_filename(BlockDriverState *bs)
 
         bs->full_open_options = opts;
     }
+}
+
+/* First refreshes exact_filename and full_open_options by calling
+ * bdrv_refresh_filename(). Then, if exact_filename is set, it is copied into
+ * the target buffer. Otherwise, full_open_options is converted to a JSON
+ * object, prefixed with "json:" (for use through the JSON pseudo protocol) and
+ * put there.
+ *
+ * If sz > 0, the string put into the buffer will always be null-terminated.
+ *
+ * Returns @dest.
+ */
+char *bdrv_filename(BlockDriverState *bs, char *dest, size_t sz)
+{
+    bdrv_refresh_filename(bs);
+
+    if (sz > INT_MAX) {
+        sz = INT_MAX;
+    }
 
     if (bs->exact_filename[0]) {
-        pstrcpy(bs->filename, sizeof(bs->filename), bs->exact_filename);
+        pstrcpy(dest, sz, bs->exact_filename);
     } else if (bs->full_open_options) {
         QString *json = qobject_to_json(QOBJECT(bs->full_open_options));
-        snprintf(bs->filename, sizeof(bs->filename), "json:%s",
-                 qstring_get_str(json));
+        snprintf(dest, sz, "json:%s", qstring_get_str(json));
         QDECREF(json);
     }
+
+    return dest;
+}
+
+/* Wrapper around bdrv_filename() using g_malloc(PATH_MAX) for the destination
+ * buffer.
+ */
+char *bdrv_filename_alloc(BlockDriverState *bs)
+{
+    return bdrv_filename(bs, g_malloc(PATH_MAX), PATH_MAX);
 }
 
 /* This accessor function purpose is to allow the device models to access the
