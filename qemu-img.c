@@ -2141,6 +2141,7 @@ typedef struct MapEntry {
     int64_t length;
     int64_t offset;
     BlockDriverState *bs;
+    char *bs_filename;
 } MapEntry;
 
 static void dump_map_entry(OutputFormat output_format, MapEntry *e,
@@ -2155,7 +2156,7 @@ static void dump_map_entry(OutputFormat output_format, MapEntry *e,
         }
         if ((e->flags & (BDRV_BLOCK_DATA|BDRV_BLOCK_ZERO)) == BDRV_BLOCK_DATA) {
             printf("%#-16"PRIx64"%#-16"PRIx64"%#-16"PRIx64"%s\n",
-                   e->start, e->length, e->offset, e->bs->filename);
+                   e->start, e->length, e->offset, e->bs_filename);
         }
         /* This format ignores the distinction between 0, ZERO and ZERO|DATA.
          * Modify the flags here to allow more coalescing.
@@ -2305,6 +2306,12 @@ static int img_map(int argc, char **argv)
             goto out;
         }
 
+        if (next.bs == curr.bs) {
+            next.bs_filename = curr.bs_filename;
+        } else {
+            next.bs_filename = bdrv_filename_alloc(next.bs);
+        }
+
         if (curr.length != 0 && curr.flags == next.flags &&
             curr.depth == next.depth &&
             ((curr.flags & BDRV_BLOCK_OFFSET_VALID) == 0 ||
@@ -2316,10 +2323,15 @@ static int img_map(int argc, char **argv)
         if (curr.length > 0) {
             dump_map_entry(output_format, &curr, &next);
         }
+
+        if (curr.bs != next.bs) {
+            g_free(curr.bs_filename);
+        }
         curr = next;
     }
 
     dump_map_entry(output_format, &curr, NULL);
+    g_free(curr.bs_filename);
 
 out:
     blk_unref(blk);
