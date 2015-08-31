@@ -33,9 +33,9 @@ __all__ = ['imgfmt', 'imgproto', 'test_dir' 'qemu_img', 'qemu_io',
 
 # This will not work if arguments or path contain spaces but is necessary if we
 # want to support the override options that ./check supports.
-qemu_img_args = os.environ.get('QEMU_IMG', 'qemu-img').strip().split(' ')
-qemu_io_args = os.environ.get('QEMU_IO', 'qemu-io').strip().split(' ')
-qemu_args = os.environ.get('QEMU', 'qemu').strip().split(' ')
+qemu_img_args = os.environ.get('QEMU_IMG_CMD', 'qemu-img').strip().split(' ')
+qemu_io_args = os.environ.get('QEMU_IO_CMD', 'qemu-io').strip().split(' ')
+qemu_args = os.environ.get('QEMU_CMD', 'qemu').strip().split(' ')
 
 imgfmt = os.environ.get('IMGFMT', 'raw')
 imgproto = os.environ.get('IMGPROTO', 'file')

@@ -231,10 +231,10 @@ FULL_HOST_DETAILS=`_full_platform_details`
 #FULL_MOUNT_OPTIONS=`_scratch_mount_options`
 
 cat <<EOF
-QEMU          -- $QEMU
-QEMU_IMG      -- $QEMU_IMG
-QEMU_IO       -- $QEMU_IO
-QEMU_NBD      -- $QEMU_NBD
+QEMU          -- $QEMU_CMD
+QEMU_IMG      -- $QEMU_IMG_CMD
+QEMU_IO       -- $QEMU_IO_CMD
+QEMU_NBD      -- $QEMU_NBD_CMD
 IMGFMT        -- $FULL_IMGFMT_DETAILS
 IMGPROTO      -- $FULL_IMGPROTO_DETAILS
 PLATFORM      -- $FULL_HOST_DETAILS
