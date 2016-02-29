@@ -28,7 +28,6 @@ import qtest
 import struct
 import json
 
-
 # This will not work if arguments contain spaces but is necessary if we
 # want to support the override options that ./check supports.
 qemu_img_args = [os.environ.get('QEMU_IMG_PROG', 'qemu-img')]
@@ -38,6 +37,10 @@ if os.environ.get('QEMU_IMG_OPTIONS'):
 qemu_io_args = [os.environ.get('QEMU_IO_PROG', 'qemu-io')]
 if os.environ.get('QEMU_IO_OPTIONS'):
     qemu_io_args += os.environ['QEMU_IO_OPTIONS'].strip().split(' ')
+
+qemu_nbd_args = [os.environ.get('QEMU_NBD_PROG', 'qemu-nbd')]
+if os.environ.get('QEMU_NBD_OPTIONS'):
+    qemu_nbd_args += os.environ['QEMU_NBD_OPTIONS'].strip().split(' ')
 
 qemu_prog = os.environ.get('QEMU_PROG', 'qemu')
 qemu_opts = os.environ.get('QEMU_OPTIONS', '').strip().split(' ')
@@ -85,6 +88,11 @@ def qemu_io(*args):
     if exitcode < 0:
         sys.stderr.write('qemu-io received signal %i: %s\n' % (-exitcode, ' '.join(args)))
     return subp.communicate()[0]
+
+def qemu_nbd(*args):
+    '''Run qemu-nbd in the background'''
+    subp = subprocess.Popen(qemu_nbd_args + list(args))
+    return subp
 
 def compare_images(img1, img2):
     '''Return True if two image files are identical'''
