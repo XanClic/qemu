@@ -33,7 +33,8 @@
 #include "qapi/qmp/types.h"
 #include "sysemu/block-backend.h"
 
-BlockDeviceInfo *bdrv_block_device_info(BlockDriverState *bs, Error **errp)
+BlockDeviceInfo *bdrv_block_device_info(BlockBackend *blk,
+                                        BlockDriverState *bs, Error **errp)
 {
     ImageInfo **p_image_info;
     BlockDriverState *bs0;
@@ -47,7 +48,7 @@ BlockDeviceInfo *bdrv_block_device_info(BlockDriverState *bs, Error **errp)
 
     info->cache = g_new(BlockdevCacheInfo, 1);
     *info->cache = (BlockdevCacheInfo) {
-        .writeback      = bdrv_enable_write_cache(bs),
+        .writeback      = blk ? blk_enable_write_cache(blk) : true,
         .direct         = !!(bs->open_flags & BDRV_O_NOCACHE),
         .no_flush       = !!(bs->open_flags & BDRV_O_NO_FLUSH),
     };
@@ -342,7 +343,7 @@ static void bdrv_query_info(BlockBackend *blk, BlockInfo **p_info,
 
     if (bs && bs->drv) {
         info->has_inserted = true;
-        info->inserted = bdrv_block_device_info(bs, errp);
+        info->inserted = bdrv_block_device_info(blk, bs, errp);
         if (info->inserted == NULL) {
             goto err;
         }
