@@ -651,9 +651,8 @@ static void dump_qlist(fprintf_function func_fprintf, void *f, int indentation,
     for (entry = qlist_first(list); entry; entry = qlist_next(entry), i++) {
         QType type = qobject_type(entry->value);
         bool composite = (type == QTYPE_QDICT || type == QTYPE_QLIST);
-        const char *format = composite ? "%*s[%i]:\n" : "%*s[%i]: ";
-
-        func_fprintf(f, format, indentation * 4, "", i);
+        func_fprintf(f, "%*s[%i]:%c", indentation * 4, "", i,
+                     composite ? '\n' : ' ');
         dump_qobject(func_fprintf, f, indentation + 1, entry->value);
         if (!composite) {
             func_fprintf(f, "\n");
@@ -669,7 +668,6 @@ static void dump_qdict(fprintf_function func_fprintf, void *f, int indentation,
     for (entry = qdict_first(dict); entry; entry = qdict_next(dict, entry)) {
         QType type = qobject_type(entry->value);
         bool composite = (type == QTYPE_QDICT || type == QTYPE_QLIST);
-        const char *format = composite ? "%*s%s:\n" : "%*s%s: ";
         char key[strlen(entry->key) + 1];
         int i;
 
@@ -678,8 +676,8 @@ static void dump_qdict(fprintf_function func_fprintf, void *f, int indentation,
             key[i] = entry->key[i] == '-' ? ' ' : entry->key[i];
         }
         key[i] = 0;
-
-        func_fprintf(f, format, indentation * 4, "", key);
+        func_fprintf(f, "%*s%s:%c", indentation * 4, "", key,
+                     composite ? '\n' : ' ');
         dump_qobject(func_fprintf, f, indentation + 1, entry->value);
         if (!composite) {
             func_fprintf(f, "\n");
