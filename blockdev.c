@@ -2867,9 +2867,6 @@ void hmp_drive_del(Monitor *mon, const QDict *qdict)
 
     /* Make the BlockBackend and the attached BlockDriverState anonymous */
     monitor_remove_blk(blk);
-    if (blk_bs(blk)) {
-        bdrv_make_anon(blk_bs(blk));
-    }
 
     /* If this BlockBackend has a device attached to it, its refcount will be
      * decremented when the device is removed; otherwise we have to do so here.
