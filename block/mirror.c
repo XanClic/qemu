@@ -313,6 +313,12 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
         assert(sector_num >= 0);
     }
 
+    while (test_bit(sector_num / sectors_per_chunk, s->in_flight_bitmap)) {
+        trace_mirror_yield_in_flight(s, sector_num / sectors_per_chunk,
+                                     s->in_flight);
+        mirror_wait_for_io(s);
+    }
+
     /* Find the number of consective dirty chunks following the first dirty
      * one, and wait for in flight requests in them. */
     while (nb_chunks * sectors_per_chunk < (s->buf_size >> BDRV_SECTOR_BITS)) {
@@ -324,17 +330,12 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
             break;
         }
         if (test_bit(next_chunk, s->in_flight_bitmap)) {
-            if (nb_chunks > 0) {
-                break;
-            }
-            trace_mirror_yield_in_flight(s, next_sector, s->in_flight);
-            mirror_wait_for_io(s);
-            /* Now retry.  */
-        } else {
-            hbitmap_next = hbitmap_iter_next(&s->hbi);
-            assert(hbitmap_next == next_sector);
-            nb_chunks++;
+            break;
         }
+
+        hbitmap_next = hbitmap_iter_next(&s->hbi);
+        assert(hbitmap_next == next_sector);
+        nb_chunks++;
     }
 
     /* Clear dirty bits before querying the block status, because
