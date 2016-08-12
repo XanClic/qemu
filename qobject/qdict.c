@@ -11,6 +11,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qapi/qmp/qint.h"
 #include "qapi/qmp/qfloat.h"
 #include "qapi/qmp/qdict.h"
@@ -198,7 +199,7 @@ static QObject *qdict_get_obj(const QDict *qdict, const char *key, QType type)
  *
  * Return number mapped by 'key'.
  */
-double qdict_get_double(const QDict *qdict, const char *key)
+double qdict_get_double_safe(const QDict *qdict, const char *key, Error **errp)
 {
     QObject *obj = qdict_get(qdict, key);
 
@@ -221,7 +222,7 @@ double qdict_get_double(const QDict *qdict, const char *key)
  *
  * Return integer mapped by 'key'.
  */
-int64_t qdict_get_int(const QDict *qdict, const char *key)
+int64_t qdict_get_int_safe(const QDict *qdict, const char *key, Error **errp)
 {
     return qint_get_int(qobject_to_qint(qdict_get(qdict, key)));
 }
@@ -234,7 +235,7 @@ int64_t qdict_get_int(const QDict *qdict, const char *key)
  *
  * Return bool mapped by 'key'.
  */
-bool qdict_get_bool(const QDict *qdict, const char *key)
+bool qdict_get_bool_safe(const QDict *qdict, const char *key, Error **errp)
 {
     return qbool_get_bool(qobject_to_qbool(qdict_get(qdict, key)));
 }
@@ -247,7 +248,7 @@ bool qdict_get_bool(const QDict *qdict, const char *key)
  *
  * Return QList mapped by 'key'.
  */
-QList *qdict_get_qlist(const QDict *qdict, const char *key)
+QList *qdict_get_qlist_safe(const QDict *qdict, const char *key, Error **errp)
 {
     return qobject_to_qlist(qdict_get_obj(qdict, key, QTYPE_QLIST));
 }
@@ -260,7 +261,7 @@ QList *qdict_get_qlist(const QDict *qdict, const char *key)
  *
  * Return QDict mapped by 'key'.
  */
-QDict *qdict_get_qdict(const QDict *qdict, const char *key)
+QDict *qdict_get_qdict_safe(const QDict *qdict, const char *key, Error **errp)
 {
     return qobject_to_qdict(qdict_get(qdict, key));
 }
@@ -274,7 +275,8 @@ QDict *qdict_get_qdict(const QDict *qdict, const char *key)
  *
  * Return pointer to the string mapped by 'key'.
  */
-const char *qdict_get_str(const QDict *qdict, const char *key)
+const char *qdict_get_str_safe(const QDict *qdict, const char *key,
+                               Error **errp)
 {
     return qstring_get_str(qobject_to_qstring(qdict_get(qdict, key)));
 }

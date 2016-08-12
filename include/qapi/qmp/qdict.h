@@ -13,6 +13,7 @@
 #ifndef QDICT_H
 #define QDICT_H
 
+#include "qapi/error.h"
 #include "qapi/qmp/qobject.h"
 #include "qapi/qmp/qlist.h"
 #include "qemu/queue.h"
@@ -53,12 +54,32 @@ void qdict_destroy_obj(QObject *obj);
         qdict_put_obj(qdict, key, QOBJECT(obj))
 
 /* High level helpers */
-double qdict_get_double(const QDict *qdict, const char *key);
-int64_t qdict_get_int(const QDict *qdict, const char *key);
-bool qdict_get_bool(const QDict *qdict, const char *key);
-QList *qdict_get_qlist(const QDict *qdict, const char *key);
-QDict *qdict_get_qdict(const QDict *qdict, const char *key);
-const char *qdict_get_str(const QDict *qdict, const char *key);
+double qdict_get_double_safe(const QDict *qdict, const char *key, Error **errp);
+int64_t qdict_get_int_safe(const QDict *qdict, const char *key, Error **errp);
+bool qdict_get_bool_safe(const QDict *qdict, const char *key, Error **errp);
+QList *qdict_get_qlist_safe(const QDict *qdict, const char *key, Error **errp);
+QDict *qdict_get_qdict_safe(const QDict *qdict, const char *key, Error **errp);
+const char *qdict_get_str_safe(const QDict *qdict, const char *key,
+                               Error **errp);
+
+#define qdict_get_double(qdict, key) \
+        qdict_get_double_safe(qdict, key, &error_abort)
+
+#define qdict_get_int(qdict, key) \
+        qdict_get_int_safe(qdict, key, &error_abort)
+
+#define qdict_get_bool(qdict, key) \
+        qdict_get_bool_safe(qdict, key, &error_abort)
+
+#define qdict_get_qlist(qdict, key) \
+        qdict_get_qlist_safe(qdict, key, &error_abort)
+
+#define qdict_get_qdict(qdict, key) \
+        qdict_get_qdict_safe(qdict, key, &error_abort)
+
+#define qdict_get_str(qdict, key) \
+        qdict_get_str_safe(qdict, key, &error_abort)
+
 int64_t qdict_get_try_int(const QDict *qdict, const char *key,
                           int64_t def_value);
 bool qdict_get_try_bool(const QDict *qdict, const char *key, bool def_value);
