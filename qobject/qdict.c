@@ -178,20 +178,6 @@ size_t qdict_size(const QDict *qdict)
 }
 
 /**
- * qdict_get_obj(): Get a QObject of a specific type
- */
-static QObject *qdict_get_obj(const QDict *qdict, const char *key, QType type)
-{
-    QObject *obj;
-
-    obj = qdict_get(qdict, key);
-    assert(obj != NULL);
-    assert(qobject_type(obj) == type);
-
-    return obj;
-}
-
-/**
  * qdict_get_double(): Get an number mapped by 'key'
  *
  * This function assumes that 'key' exists and it stores a
@@ -202,15 +188,19 @@ static QObject *qdict_get_obj(const QDict *qdict, const char *key, QType type)
 double qdict_get_double_safe(const QDict *qdict, const char *key, Error **errp)
 {
     QObject *obj = qdict_get(qdict, key);
+    if (!obj) {
+        error_setg(errp, "Key '%s' not found", key);
+        return 0.0;
+    }
 
-    assert(obj);
     switch (qobject_type(obj)) {
     case QTYPE_QFLOAT:
         return qfloat_get_double(qobject_to_qfloat(obj));
     case QTYPE_QINT:
         return qint_get_int(qobject_to_qint(obj));
     default:
-        abort();
+        error_setg(errp, "Key '%s' does not map to a number", key);
+        return 0.0;
     }
 }
 
@@ -224,7 +214,16 @@ double qdict_get_double_safe(const QDict *qdict, const char *key, Error **errp)
  */
 int64_t qdict_get_int_safe(const QDict *qdict, const char *key, Error **errp)
 {
-    return qint_get_int(qobject_to_qint(qdict_get(qdict, key)));
+    QObject *obj = qdict_get(qdict, key);
+    if (!obj) {
+        error_setg(errp, "Key '%s' not found", key);
+        return 0;
+    }
+    if (qobject_type(obj) != QTYPE_QINT) {
+        error_setg(errp, "Key '%s' does not map to an integer", key);
+        return 0;
+    }
+    return qint_get_int(qobject_to_qint(obj));
 }
 
 /**
@@ -237,7 +236,16 @@ int64_t qdict_get_int_safe(const QDict *qdict, const char *key, Error **errp)
  */
 bool qdict_get_bool_safe(const QDict *qdict, const char *key, Error **errp)
 {
-    return qbool_get_bool(qobject_to_qbool(qdict_get(qdict, key)));
+    QObject *obj = qdict_get(qdict, key);
+    if (!obj) {
+        error_setg(errp, "Key '%s' not found", key);
+        return false;
+    }
+    if (qobject_type(obj) != QTYPE_QBOOL) {
+        error_setg(errp, "Key '%s' does not map to a boolean", key);
+        return false;
+    }
+    return qbool_get_bool(qobject_to_qbool(obj));
 }
 
 /**
@@ -250,7 +258,16 @@ bool qdict_get_bool_safe(const QDict *qdict, const char *key, Error **errp)
  */
 QList *qdict_get_qlist_safe(const QDict *qdict, const char *key, Error **errp)
 {
-    return qobject_to_qlist(qdict_get_obj(qdict, key, QTYPE_QLIST));
+    QObject *obj = qdict_get(qdict, key);
+    if (!obj) {
+        error_setg(errp, "Key '%s' not found", key);
+        return NULL;
+    }
+    if (qobject_type(obj) != QTYPE_QLIST) {
+        error_setg(errp, "Key '%s' does not map to a list", key);
+        return NULL;
+    }
+    return qobject_to_qlist(obj);
 }
 
 /**
@@ -263,7 +280,16 @@ QList *qdict_get_qlist_safe(const QDict *qdict, const char *key, Error **errp)
  */
 QDict *qdict_get_qdict_safe(const QDict *qdict, const char *key, Error **errp)
 {
-    return qobject_to_qdict(qdict_get(qdict, key));
+    QObject *obj = qdict_get(qdict, key);
+    if (!obj) {
+        error_setg(errp, "Key '%s' not found", key);
+        return NULL;
+    }
+    if (qobject_type(obj) != QTYPE_QDICT) {
+        error_setg(errp, "Key '%s' does not map to a dict", key);
+        return NULL;
+    }
+    return qobject_to_qdict(obj);
 }
 
 /**
@@ -278,7 +304,16 @@ QDict *qdict_get_qdict_safe(const QDict *qdict, const char *key, Error **errp)
 const char *qdict_get_str_safe(const QDict *qdict, const char *key,
                                Error **errp)
 {
-    return qstring_get_str(qobject_to_qstring(qdict_get(qdict, key)));
+    QObject *obj = qdict_get(qdict, key);
+    if (!obj) {
+        error_setg(errp, "Key '%s' not found", key);
+        return NULL;
+    }
+    if (qobject_type(obj) != QTYPE_QSTRING) {
+        error_setg(errp, "Key '%s' does not map to a string", key);
+        return NULL;
+    }
+    return qstring_get_str(qobject_to_qstring(obj));
 }
 
 /**
