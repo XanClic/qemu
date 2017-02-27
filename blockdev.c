@@ -2930,7 +2930,7 @@ void qmp_block_resize(bool has_device, const char *device,
     /* complete all in-flight operations before resizing the device */
     bdrv_drain_all();
 
-    ret = blk_truncate(blk, size, errp);
+    ret = blk_truncate(blk, size, PREALLOC_MODE_OFF, errp);
 
 out:
     blk_unref(blk);
