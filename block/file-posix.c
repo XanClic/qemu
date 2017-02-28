@@ -1915,6 +1915,8 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
 #endif
     case PREALLOC_MODE_FULL:
     {
+        int64_t num = 0, left = total_size;
+
         /*
          * Knowing the final size from the beginning could allow the file
          * system driver to do less allocations and possibly avoid
@@ -1926,7 +1928,6 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
             goto out_close;
         }
 
-        int64_t num = 0, left = total_size;
         buf = g_malloc0(65536);
 
         while (left > 0) {
@@ -1958,7 +1959,7 @@ static int raw_create(const char *filename, QemuOpts *opts, Error **errp)
         }
         break;
     default:
-        result = -EINVAL;
+        result = -ENOTSUP;
         error_setg(errp, "Unsupported preallocation mode: %s",
                    PreallocMode_lookup[prealloc]);
         break;
