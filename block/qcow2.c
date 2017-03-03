@@ -2548,10 +2548,11 @@ static int qcow2_truncate(BlockDriverState *bs, int64_t offset,
                           PreallocMode prealloc, Error **errp)
 {
     BDRVQcow2State *s = bs->opaque;
+    uint64_t old_length;
     int64_t new_l1_size;
     int ret;
 
-    if (prealloc != PREALLOC_MODE_OFF) {
+    if (prealloc != PREALLOC_MODE_OFF && prealloc != PREALLOC_MODE_METADATA) {
         error_setg(errp, "Unsupported preallocation mode '%s'",
                    PreallocMode_lookup[prealloc]);
         return -ENOTSUP;
@@ -2568,8 +2569,10 @@ static int qcow2_truncate(BlockDriverState *bs, int64_t offset,
         return -ENOTSUP;
     }
 
+    old_length = bs->total_sectors * 512;
+
     /* shrinking is currently not supported */
-    if (offset < bs->total_sectors * 512) {
+    if (offset < old_length) {
         error_setg(errp, "qcow2 doesn't support shrinking images yet");
         return -ENOTSUP;
     }
@@ -2579,6 +2582,23 @@ static int qcow2_truncate(BlockDriverState *bs, int64_t offset,
     if (ret < 0) {
         error_setg_errno(errp, -ret, "Failed to grow the L1 table");
         return ret;
+    }
+
+    switch (prealloc) {
+    case PREALLOC_MODE_OFF:
+        break;
+
+    case PREALLOC_MODE_METADATA:
+        ret = preallocate(bs, old_length, offset);
+        if (ret < 0) {
+            error_setg_errno(errp, -ret, "Preallocation failed, image may now "
+                             "occupy more space than necessary");
+            return ret;
+        }
+        break;
+
+    default:
+        g_assert_not_reached();
     }
 
     /* write updated header.size */
