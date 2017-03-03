@@ -2612,7 +2612,9 @@ static int qcow2_truncate(BlockDriverState *bs, int64_t offset,
     int64_t new_l1_size;
     int ret;
 
-    if (prealloc != PREALLOC_MODE_OFF && prealloc != PREALLOC_MODE_METADATA) {
+    if (prealloc != PREALLOC_MODE_OFF && prealloc != PREALLOC_MODE_METADATA &&
+        prealloc != PREALLOC_MODE_FALLOC && prealloc != PREALLOC_MODE_FULL)
+    {
         error_setg(errp, "Unsupported preallocation mode '%s'",
                    PreallocMode_lookup[prealloc]);
         return -ENOTSUP;
@@ -2656,6 +2658,38 @@ static int qcow2_truncate(BlockDriverState *bs, int64_t offset,
             return ret;
         }
         break;
+
+    case PREALLOC_MODE_FALLOC:
+    case PREALLOC_MODE_FULL:
+    {
+        uint64_t additional_size = qcow2_calc_size_usage(bs, old_length, offset,
+                                                         s->cluster_bits,
+                                                         s->refcount_order);
+        int64_t old_file_length = bdrv_getlength(bs->file->bs);
+        if (old_file_length < 0) {
+            error_setg(errp, "Failed to inquire file length");
+            return old_file_length;
+        }
+
+        old_file_length = ROUND_UP(old_file_length, s->cluster_size);
+
+        ret = bdrv_truncate(bs->file, old_file_length + additional_size,
+                            prealloc, errp);
+        if (ret < 0) {
+            error_prepend(errp, "Failed to resize underlying file");
+            return ret;
+        }
+
+        /* Ensure that preallocation is done in the preallocated area */
+        s->free_cluster_index = old_file_length / s->cluster_size;
+        ret = preallocate(bs, old_length, offset);
+        if (ret < 0) {
+            error_setg_errno(errp, -ret, "Preallocation failed, image may now "
+                             "occupy more space than necessary");
+            return ret;
+        }
+        break;
+    }
 
     default:
         g_assert_not_reached();
