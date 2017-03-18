@@ -35,6 +35,8 @@ typedef struct MirrorBuffer {
     QSIMPLEQ_ENTRY(MirrorBuffer) next;
 } MirrorBuffer;
 
+typedef struct MirrorOp MirrorOp;
+
 typedef struct MirrorBlockJob {
     BlockJob common;
     RateLimit limit;
@@ -68,6 +70,7 @@ typedef struct MirrorBlockJob {
     unsigned long *in_flight_bitmap;
     int in_flight;
     int64_t sectors_in_flight;
+    QTAILQ_HEAD(MirrorOpList, MirrorOp) ops_in_flight;
     int ret;
     bool unmap;
     bool waiting_for_io;
@@ -81,6 +84,13 @@ typedef struct MirrorOp {
     QEMUIOVector qiov;
     int64_t sector_num;
     int nb_sectors;
+
+    /* Set by mirror_co_read() before yielding for the first time */
+    int sectors_copied;
+
+    Coroutine *co;
+
+    QTAILQ_ENTRY(MirrorOp) next;
 } MirrorOp;
 
 typedef enum MirrorMethod {
@@ -102,7 +112,7 @@ static BlockErrorAction mirror_error_action(MirrorBlockJob *s, bool read,
     }
 }
 
-static void mirror_iteration_done(MirrorOp *op, int ret)
+static void coroutine_fn mirror_iteration_done(MirrorOp *op, int ret)
 {
     MirrorBlockJob *s = op->s;
     struct iovec *iov;
@@ -119,6 +129,8 @@ static void mirror_iteration_done(MirrorOp *op, int ret)
         QSIMPLEQ_INSERT_TAIL(&s->buf_free, buf, next);
         s->buf_free_count++;
     }
+
+    QTAILQ_REMOVE(&s->ops_in_flight, op, next);
 
     sectors_per_chunk = s->granularity >> BDRV_SECTOR_BITS;
     chunk_num = op->sector_num / sectors_per_chunk;
@@ -140,9 +152,8 @@ static void mirror_iteration_done(MirrorOp *op, int ret)
     }
 }
 
-static void mirror_write_complete(void *opaque, int ret)
+static void coroutine_fn mirror_write_complete(MirrorOp *op, int ret)
 {
-    MirrorOp *op = opaque;
     MirrorBlockJob *s = op->s;
 
     aio_context_acquire(blk_get_aio_context(s->common.blk));
@@ -159,9 +170,8 @@ static void mirror_write_complete(void *opaque, int ret)
     aio_context_release(blk_get_aio_context(s->common.blk));
 }
 
-static void mirror_read_complete(void *opaque, int ret)
+static void coroutine_fn mirror_read_complete(MirrorOp *op, int ret)
 {
-    MirrorOp *op = opaque;
     MirrorBlockJob *s = op->s;
 
     aio_context_acquire(blk_get_aio_context(s->common.blk));
@@ -176,8 +186,11 @@ static void mirror_read_complete(void *opaque, int ret)
 
         mirror_iteration_done(op, ret);
     } else {
-        blk_aio_pwritev(s->target, op->sector_num * BDRV_SECTOR_SIZE, &op->qiov,
-                        0, mirror_write_complete, op);
+        int ret;
+
+        ret = blk_co_pwritev(s->target, op->sector_num * BDRV_SECTOR_SIZE,
+                             op->qiov.size, &op->qiov, 0);
+        mirror_write_complete(op, ret);
     }
     aio_context_release(blk_get_aio_context(s->common.blk));
 }
@@ -232,8 +245,14 @@ static int mirror_cow_align(MirrorBlockJob *s,
 
 static inline void mirror_wait_for_io(MirrorBlockJob *s)
 {
+    MirrorOp *last_op = QTAILQ_LAST(&s->ops_in_flight, MirrorOpList);
+
+    assert(last_op);
+
     assert(!s->waiting_for_io);
     s->waiting_for_io = true;
+    /* Yield control to the oldest operation still running */
+    aio_co_wake(last_op->co);
     qemu_coroutine_yield();
     s->waiting_for_io = false;
 }
@@ -245,44 +264,38 @@ static inline void mirror_wait_for_io(MirrorBlockJob *s)
  *          (new_end - sector_num) if tail is rounded up or down due to
  *          alignment or buffer limit.
  */
-static int mirror_do_read(MirrorBlockJob *s, int64_t sector_num,
-                          int nb_sectors)
+static void coroutine_fn mirror_co_read(void *opaque)
 {
+    MirrorOp *op = opaque;
+    MirrorBlockJob *s = op->s;
     BlockBackend *source = s->common.blk;
     int sectors_per_chunk, nb_chunks;
-    int ret;
-    MirrorOp *op;
     int max_sectors;
+    int ret;
 
     sectors_per_chunk = s->granularity >> BDRV_SECTOR_BITS;
     max_sectors = sectors_per_chunk * s->max_iov;
 
     /* We can only handle as much as buf_size at a time. */
-    nb_sectors = MIN(s->buf_size >> BDRV_SECTOR_BITS, nb_sectors);
-    nb_sectors = MIN(max_sectors, nb_sectors);
-    assert(nb_sectors);
-    ret = nb_sectors;
+    op->nb_sectors = MIN(s->buf_size >> BDRV_SECTOR_BITS, op->nb_sectors);
+    op->nb_sectors = MIN(max_sectors, op->nb_sectors);
+    assert(op->nb_sectors);
+    op->sectors_copied = op->nb_sectors;
 
     if (s->cow_bitmap) {
-        ret += mirror_cow_align(s, &sector_num, &nb_sectors);
+        op->sectors_copied += mirror_cow_align(s, &op->sector_num, &op->nb_sectors);
     }
-    assert(nb_sectors << BDRV_SECTOR_BITS <= s->buf_size);
+    assert(op->nb_sectors << BDRV_SECTOR_BITS <= s->buf_size);
     /* The sector range must meet granularity because:
      * 1) Caller passes in aligned values;
      * 2) mirror_cow_align is used only when target cluster is larger. */
-    assert(!(sector_num % sectors_per_chunk));
-    nb_chunks = DIV_ROUND_UP(nb_sectors, sectors_per_chunk);
+    assert(!(op->sector_num % sectors_per_chunk));
+    nb_chunks = DIV_ROUND_UP(op->nb_sectors, sectors_per_chunk);
 
     while (s->buf_free_count < nb_chunks) {
-        trace_mirror_yield_in_flight(s, sector_num, s->in_flight);
+        trace_mirror_yield_in_flight(s, op->sector_num, s->in_flight);
         mirror_wait_for_io(s);
     }
-
-    /* Allocate a MirrorOp that is used as an AIO callback.  */
-    op = g_new(MirrorOp, 1);
-    op->s = s;
-    op->sector_num = sector_num;
-    op->nb_sectors = nb_sectors;
 
     /* Now make a QEMUIOVector taking enough granularity-sized chunks
      * from s->buf_free.
@@ -290,7 +303,7 @@ static int mirror_do_read(MirrorBlockJob *s, int64_t sector_num,
     qemu_iovec_init(&op->qiov, nb_chunks);
     while (nb_chunks-- > 0) {
         MirrorBuffer *buf = QSIMPLEQ_FIRST(&s->buf_free);
-        size_t remaining = nb_sectors * BDRV_SECTOR_SIZE - op->qiov.size;
+        size_t remaining = op->nb_sectors * BDRV_SECTOR_SIZE - op->qiov.size;
 
         QSIMPLEQ_REMOVE_HEAD(&s->buf_free, next);
         s->buf_free_count--;
@@ -299,56 +312,91 @@ static int mirror_do_read(MirrorBlockJob *s, int64_t sector_num,
 
     /* Copy the dirty cluster.  */
     s->in_flight++;
-    s->sectors_in_flight += nb_sectors;
-    trace_mirror_one_iteration(s, sector_num, nb_sectors);
+    s->sectors_in_flight += op->nb_sectors;
+    trace_mirror_one_iteration(s, op->sector_num, op->nb_sectors);
 
-    blk_aio_preadv(source, sector_num * BDRV_SECTOR_SIZE, &op->qiov, 0,
-                   mirror_read_complete, op);
-    return ret;
+    /* Yield so the main mirror iteration code can continue execution (which is
+     * at least required so the block job's length can be updated, because this
+     * may have changed due to mirror_clip_sectors(); if we do not yield here
+     * and an error occurs during a clipped request, the error object may not
+     * always contain the same length, which is not nice) */
+    qemu_coroutine_yield();
+
+    ret = blk_co_preadv(source, op->sector_num * BDRV_SECTOR_SIZE,
+                        op->nb_sectors * BDRV_SECTOR_SIZE, &op->qiov, 0);
+    mirror_read_complete(op, ret);
 }
 
-static void mirror_do_zero_or_discard(MirrorBlockJob *s,
-                                      int64_t sector_num,
-                                      int nb_sectors,
-                                      bool is_discard)
+static void coroutine_fn mirror_co_zero(void *opaque)
 {
-    MirrorOp *op;
+    MirrorOp *op = opaque;
+    int ret;
 
-    /* Allocate a MirrorOp that is used as an AIO callback. The qiov is zeroed
-     * so the freeing in mirror_iteration_done is nop. */
-    op = g_new0(MirrorOp, 1);
-    op->s = s;
-    op->sector_num = sector_num;
-    op->nb_sectors = nb_sectors;
+    op->s->in_flight++;
+    op->s->sectors_in_flight += op->nb_sectors;
 
-    s->in_flight++;
-    s->sectors_in_flight += nb_sectors;
-    if (is_discard) {
-        blk_aio_pdiscard(s->target, sector_num << BDRV_SECTOR_BITS,
-                         op->nb_sectors << BDRV_SECTOR_BITS,
-                         mirror_write_complete, op);
-    } else {
-        blk_aio_pwrite_zeroes(s->target, sector_num * BDRV_SECTOR_SIZE,
-                              op->nb_sectors * BDRV_SECTOR_SIZE,
-                              s->unmap ? BDRV_REQ_MAY_UNMAP : 0,
-                              mirror_write_complete, op);
-    }
+    /* Yield so the main mirror iteration code can continue execution */
+    qemu_coroutine_yield();
+
+    ret = blk_co_pwrite_zeroes(op->s->target,
+                               op->sector_num << BDRV_SECTOR_BITS,
+                               op->nb_sectors << BDRV_SECTOR_BITS,
+                               op->s->unmap ? BDRV_REQ_MAY_UNMAP : 0);
+    mirror_write_complete(op, ret);
+}
+
+static void coroutine_fn mirror_co_discard(void *opaque)
+{
+    MirrorOp *op = opaque;
+    int ret;
+
+    op->s->in_flight++;
+    op->s->sectors_in_flight += op->nb_sectors;
+
+    /* Yield so the main mirror iteration code can continue execution */
+    qemu_coroutine_yield();
+
+    ret = blk_co_pdiscard(op->s->target,
+                          op->sector_num << BDRV_SECTOR_BITS,
+                          op->nb_sectors << BDRV_SECTOR_BITS);
+    mirror_write_complete(op, ret);
 }
 
 static int mirror_perform(MirrorBlockJob *s, int64_t sector_num,
                           int nb_sectors, MirrorMethod mirror_method)
 {
+    MirrorOp *op;
+    int ret = nb_sectors;
+
+    op = g_new(MirrorOp, 1);
+    *op = (MirrorOp){
+        .s              = s,
+        .sector_num     = sector_num,
+        .nb_sectors     = nb_sectors,
+    };
+
     switch (mirror_method) {
     case MIRROR_METHOD_COPY:
-        return mirror_do_read(s, sector_num, nb_sectors);
+        op->co = qemu_coroutine_create(mirror_co_read, op);
+        break;
     case MIRROR_METHOD_ZERO:
+        op->co = qemu_coroutine_create(mirror_co_zero, op);
+        break;
     case MIRROR_METHOD_DISCARD:
-        mirror_do_zero_or_discard(s, sector_num, nb_sectors,
-                                  mirror_method == MIRROR_METHOD_DISCARD);
-        return nb_sectors;
+        op->co = qemu_coroutine_create(mirror_co_discard, op);
+        break;
     default:
         abort();
     }
+
+    QTAILQ_INSERT_TAIL(&s->ops_in_flight, op, next);
+    qemu_coroutine_enter(op->co);
+
+    if (mirror_method == MIRROR_METHOD_COPY) {
+        ret = op->sectors_copied;
+    }
+
+    return ret;
 }
 
 static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
@@ -646,7 +694,7 @@ static int coroutine_fn mirror_dirty_init(MirrorBlockJob *s)
                 continue;
             }
 
-            mirror_do_zero_or_discard(s, sector_num, nb_sectors, false);
+            mirror_perform(s, sector_num, nb_sectors, MIRROR_METHOD_ZERO);
             sector_num += nb_sectors;
         }
 
@@ -1245,6 +1293,8 @@ static void mirror_start_job(const char *job_id, BlockDriverState *bs,
             }
         }
     }
+
+    QTAILQ_INIT(&s->ops_in_flight);
 
     trace_mirror_start(bs, s, opaque);
     block_job_start(&s->common);
