@@ -83,6 +83,12 @@ typedef struct MirrorOp {
     int nb_sectors;
 } MirrorOp;
 
+typedef enum MirrorMethod {
+    MIRROR_METHOD_COPY,
+    MIRROR_METHOD_ZERO,
+    MIRROR_METHOD_DISCARD,
+} MirrorMethod;
+
 static BlockErrorAction mirror_error_action(MirrorBlockJob *s, bool read,
                                             int error)
 {
@@ -329,6 +335,22 @@ static void mirror_do_zero_or_discard(MirrorBlockJob *s,
     }
 }
 
+static int mirror_perform(MirrorBlockJob *s, int64_t sector_num,
+                          int nb_sectors, MirrorMethod mirror_method)
+{
+    switch (mirror_method) {
+    case MIRROR_METHOD_COPY:
+        return mirror_do_read(s, sector_num, nb_sectors);
+    case MIRROR_METHOD_ZERO:
+    case MIRROR_METHOD_DISCARD:
+        mirror_do_zero_or_discard(s, sector_num, nb_sectors,
+                                  mirror_method == MIRROR_METHOD_DISCARD);
+        return nb_sectors;
+    default:
+        abort();
+    }
+}
+
 static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
 {
     BlockDriverState *source = s->source;
@@ -393,11 +415,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
         int64_t ret;
         int io_sectors, io_sectors_acct;
         BlockDriverState *file;
-        enum MirrorMethod {
-            MIRROR_METHOD_COPY,
-            MIRROR_METHOD_ZERO,
-            MIRROR_METHOD_DISCARD
-        } mirror_method = MIRROR_METHOD_COPY;
+        MirrorMethod mirror_method = MIRROR_METHOD_COPY;
 
         assert(!(sector_num % sectors_per_chunk));
         ret = bdrv_get_block_status_above(source, NULL, sector_num,
@@ -436,23 +454,11 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
         }
 
         mirror_clip_sectors(s, sector_num, &io_sectors);
-        switch (mirror_method) {
-        case MIRROR_METHOD_COPY:
-            io_sectors = mirror_do_read(s, sector_num, io_sectors);
+        io_sectors = mirror_perform(s, sector_num, io_sectors, mirror_method);
+        if (mirror_method != MIRROR_METHOD_COPY && write_zeroes_ok) {
+            io_sectors_acct = 0;
+        } else {
             io_sectors_acct = io_sectors;
-            break;
-        case MIRROR_METHOD_ZERO:
-        case MIRROR_METHOD_DISCARD:
-            mirror_do_zero_or_discard(s, sector_num, io_sectors,
-                                      mirror_method == MIRROR_METHOD_DISCARD);
-            if (write_zeroes_ok) {
-                io_sectors_acct = 0;
-            } else {
-                io_sectors_acct = io_sectors;
-            }
-            break;
-        default:
-            abort();
         }
         assert(io_sectors);
         sector_num += io_sectors;
