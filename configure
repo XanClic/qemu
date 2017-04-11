@@ -5767,6 +5767,10 @@ if test "$replication" = "yes" ; then
   echo "CONFIG_REPLICATION=y" >> $config_host_mak
 fi
 
+if test "$modules" = "yes" ; then
+  echo "CONFIG_QCOW2_RUST=m" >> $config_host_mak
+fi
+
 if test "$have_af_vsock" = "yes" ; then
   echo "CONFIG_AF_VSOCK=y" >> $config_host_mak
 fi
