@@ -1,4 +1,7 @@
-use libc::{c_int,c_ulong,c_void,size_t};
+/* TODO: Finish BlockDriverState; rename [^Q]ListEntry to QListEntry */
+
+
+use libc::{c_int,c_uint,c_ulong,c_void,size_t};
 use std::ptr;
 
 mod functions;
@@ -314,6 +317,65 @@ pub struct BlockDriverState {
     pub opaque: *mut c_void,
 
     pub aio_context: *mut AioContext,
+    pub aio_notifiers: *mut BdrvAioNotifier,
+    pub walking_aio_notifiers: bool,
+
+    pub filename: [u8; 4096],
+    pub backing_file: [u8; 4096],
+
+    pub backing_format: [u8; 16],
+
+    pub full_open_options: *mut QDict,
+    pub exact_filename: [u8; 4096],
+
+    pub backing: *mut BdrvChild,
+    pub file: *mut BdrvChild,
+
+    pub bl: BlockLimits,
+
+    pub supported_write_flags: c_uint,
+    pub supported_zero_flags: c_uint,
+
+    pub node_name: [u8; 32],
+    pub node_list: BlockDriverStateQTailQEntry,
+    pub bs_list: BlockDriverStateQTailQEntry,
+    pub monitor_list: BlockDriverStateQTailQEntry,
+    pub refcnt: c_int,
+
+    /* FIXME: 16 should be BLOCK_OP_TYPE_MAX */
+    pub op_blockers: [*mut BdrvOpBlocker; 16],
+
+    pub job: *mut BlockJob,
+
+    pub inherits_from: *mut BlockDriverState,
+    pub children: *mut BdrvChild,
+    pub parents: *mut BdrvChild,
+
+    pub options: *mut QDict,
+    pub explicit_options: *mut QDict,
+    pub detect_zeroes: c_int, /* BlockdevDetectZeroesOptions */
+
+    pub backing_blocker: *mut Error,
+
+    pub copy_on_read: c_int,
+
+    pub total_sectors: i64,
+
+    pub before_write_notifiers: NotifierWithReturnList,
+
+    pub in_flight: c_uint,
+    pub serialising_in_flight: c_uint,
+
+    pub wakeup: bool,
+
+    pub wr_highest_offset: u64,
+
+    pub write_threshold_offset: u64,
+    pub write_threshold_notifier: NotifierWithReturn,
+
+    pub io_plugged: c_uint,
+
+    pub tracked_requests: *mut BdrvTrackedRequest,
 }
 
 #[repr(C)]
@@ -329,6 +391,12 @@ pub struct BDRVReopenState {
 pub struct BlockDriverListEntry {
     le_next: *mut BlockDriver,
     le_prev: *mut *mut BlockDriver,
+}
+
+#[repr(C)]
+pub struct BlockDriverStateQTailQEntry {
+    tqe_next: *mut BlockDriverState,
+    tqe_prev: *mut *mut BlockDriverState,
 }
 
 #[repr(C)]
@@ -353,6 +421,20 @@ pub struct HDGeometry {
     pub heads: u32,
     pub sectors: u32,
     pub cylinders: u32,
+}
+
+#[repr(C)]
+pub struct BlockLimits {
+    pub request_alignment: u32,
+    pub max_pdiscard: i32,
+    pub pdiscard_alignment: u32,
+    pub max_pwrite_zeroes: i32,
+    pub pwrite_zeroes_alignment: u32,
+    pub opt_transfer: u32,
+    pub max_transfer: u32,
+    pub min_mem_alignment: size_t,
+    pub opt_mem_alignment: size_t,
+    pub max_iov: c_int,
 }
 
 #[repr(C)]
@@ -440,6 +522,24 @@ pub struct QEMUSnapshotInfo {
     pub vm_clock_nsec: u64,
 }
 
+#[repr(C)]
+pub struct NotifierWithReturnList {
+    pub notifiers: *mut NotifierWithReturn,
+}
+
+#[repr(C)]
+pub struct NotifierWithReturn {
+    pub notify: extern fn(notifier: *mut NotifierWithReturn, data: *mut c_void)
+                    -> c_int,
+    pub node: NotifierWithReturnQListEntry,
+}
+
+#[repr(C)]
+pub NotifierWithReturnQListEntry {
+    pub le_next: *mut NotifierWithReturn,
+    pub le_prev: *mut *mut NotifierWithReturn,
+}
+
 type BlockDriverAmendStatusCB = extern fn(bs: *mut BlockDriverState,
                                           offset: i64, total_work_size: i64,
                                           opaque: *mut c_void);
@@ -447,6 +547,7 @@ type BlockDriverAmendStatusCB = extern fn(bs: *mut BlockDriverState,
 /* Opaque types */
 pub enum AioContext {}
 pub enum BlockReopenQueue {}
+pub enum BlockJob {}
 pub enum Error {}
 pub enum QDict {}
 pub enum QemuOpts {}
