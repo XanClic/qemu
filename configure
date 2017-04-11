@@ -745,6 +745,8 @@ if test "$mingw32" = "yes" ; then
   libs_qga="-lws2_32 -lwinmm -lpowrprof -liphlpapi -lnetapi32 $libs_qga"
 fi
 
+LIBS="-ldl $LIBS"
+
 werror=""
 
 for opt do
@@ -5765,10 +5767,6 @@ fi
 
 if test "$replication" = "yes" ; then
   echo "CONFIG_REPLICATION=y" >> $config_host_mak
-fi
-
-if test "$modules" = "yes" ; then
-  echo "CONFIG_QCOW2_RUST=m" >> $config_host_mak
 fi
 
 if test "$have_af_vsock" = "yes" ; then
