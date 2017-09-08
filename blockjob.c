@@ -234,16 +234,24 @@ static char *child_job_get_parent_desc(BdrvChild *c)
                            job->id);
 }
 
+void block_job_drained_begin(BlockJob *job)
+{
+    block_job_pause(job);
+}
+
+void block_job_drained_end(BlockJob *job)
+{
+    block_job_resume(job);
+}
+
 static void child_job_drained_begin(BdrvChild *c)
 {
-    BlockJob *job = c->opaque;
-    block_job_pause(job);
+    block_job_drained_begin(c->opaque);
 }
 
 static void child_job_drained_end(BdrvChild *c)
 {
-    BlockJob *job = c->opaque;
-    block_job_resume(job);
+    block_job_drained_end(c->opaque);
 }
 
 static const BdrvChildRole child_job = {
