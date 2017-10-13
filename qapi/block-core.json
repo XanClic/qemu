@@ -950,10 +950,14 @@
 #                  addition, data is copied in background just like in
 #                  @background mode.
 #
+# @read-write-blocking: like @write-blocking, but in addition, also
+#                       writes data to the target when it is read from
+#                       the source, if it is currently dirty.
+#
 # Since: 2.12
 ##
 { 'enum': 'MirrorCopyMode',
-  'data': ['background', 'write-blocking'] }
+  'data': ['background', 'write-blocking', 'read-write-blocking'] }
 
 ##
 # @BlockJobType:

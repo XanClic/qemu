@@ -1275,7 +1275,51 @@ static void coroutine_fn active_write_settle(MirrorOp *op)
 static int coroutine_fn bdrv_mirror_top_preadv(BlockDriverState *bs,
     uint64_t offset, uint64_t bytes, QEMUIOVector *qiov, int flags)
 {
-    return bdrv_co_preadv(bs->file, offset, bytes, qiov, flags);
+    MirrorOp *op = NULL;
+    MirrorBDSOpaque *s = bs->opaque;
+    QEMUIOVector bounce_qiov, *guest_qiov;
+    void *bounce_buf;
+    int ret = 0;
+    bool copy_to_target;
+
+    copy_to_target = s->job->ret >= 0 &&
+                     s->job->copy_mode == MIRROR_COPY_MODE_READ_WRITE_BLOCKING;
+
+    if (copy_to_target) {
+        /* The guest might concurrently modify the memory area into
+         * which we are supposed to put the read data; but the data
+         * on source and destination must match, so we have to use
+         * a bounce buffer if we are going to copy the data to the
+         * target. */
+        bounce_buf = qemu_blockalign(bs, bytes);
+        qemu_iovec_init(&bounce_qiov, 1);
+        qemu_iovec_add(&bounce_qiov, bounce_buf, bytes);
+        guest_qiov = qiov;
+        qiov = &bounce_qiov;
+
+        op = active_write_prepare(s->job, offset, bytes);
+    }
+
+    ret = bdrv_co_preadv(bs->file, offset, bytes, qiov, flags);
+    if (ret < 0) {
+        goto out;
+    }
+
+    if (copy_to_target) {
+        iov_from_buf_full(guest_qiov->iov, guest_qiov->niov, 0,
+                          bounce_buf, bytes);
+
+        do_sync_target_write(s->job, offset, bytes, qiov, 0);
+    }
+
+out:
+    if (copy_to_target) {
+        active_write_settle(op);
+
+        qemu_iovec_destroy(&bounce_qiov);
+        qemu_vfree(bounce_buf);
+    }
+    return ret;
 }
 
 static int coroutine_fn bdrv_mirror_top_pwritev(BlockDriverState *bs,
@@ -1288,8 +1332,10 @@ static int coroutine_fn bdrv_mirror_top_pwritev(BlockDriverState *bs,
     int ret = 0;
     bool copy_to_target;
 
-    copy_to_target = s->job->ret >= 0 &&
-                     s->job->copy_mode == MIRROR_COPY_MODE_WRITE_BLOCKING;
+    copy_to_target =
+        s->job->ret >= 0 &&
+        (s->job->copy_mode == MIRROR_COPY_MODE_WRITE_BLOCKING ||
+         s->job->copy_mode == MIRROR_COPY_MODE_READ_WRITE_BLOCKING);
 
     if (copy_to_target) {
         /* The guest might concurrently modify the data to write; but
