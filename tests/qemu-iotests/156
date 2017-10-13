@@ -106,6 +106,13 @@ _send_qemu_cmd $QEMU_HANDLE \
                       'qemu-io source \"write -P 4 192k 64k\"' } }" \
     'return'
 
+# Read it back (proving that we can read while mirroring)
+_send_qemu_cmd $QEMU_HANDLE \
+    "{ 'execute': 'human-monitor-command',
+       'arguments': { 'command-line':
+                      'qemu-io source \"read -P 4 192k 64k\"' } }" \
+    'return'
+
 # Copy source backing chain to the target before completing the job
 cp "$TEST_IMG.backing" "$TEST_IMG.target.backing"
 cp "$TEST_IMG" "$TEST_IMG.target"
