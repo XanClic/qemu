@@ -103,10 +103,6 @@ struct MirrorOp {
     int64_t offset;
     uint64_t bytes;
 
-    /* The pointee is set by mirror_co_perform() before yielding for
-     * the first time */
-    int64_t *bytes_handled;
-
     bool is_pseudo_op;
     bool is_active_write;
     CoQueue waiting_requests;
@@ -201,8 +197,7 @@ static inline int64_t mirror_clip_bytes(MirrorBlockJob *s,
 }
 
 /* Round offset and/or bytes to target cluster if COW is needed */
-static void mirror_cow_align(MirrorBlockJob *s, int64_t *offset,
-                             uint64_t *bytes)
+static void mirror_cow_align(MirrorBlockJob *s, int64_t *offset, int64_t *bytes)
 {
     bool need_cow;
     int64_t align_offset = *offset;
@@ -296,9 +291,9 @@ static void mirror_free_qiov(MirrorBlockJob *s, QEMUIOVector *qiov)
 /* Restrict *bytes to how much we can actually handle, and align the
  * [*offset, *bytes] range to clusters if COW is needed. */
 static void mirror_align_for_copy(MirrorBlockJob *s,
-                                  int64_t *offset, uint64_t *bytes)
+                                  int64_t *offset, int64_t *bytes)
 {
-    uint64_t max_bytes;
+    int64_t max_bytes;
 
     max_bytes = s->granularity * s->max_iov;
 
@@ -379,24 +374,10 @@ static void coroutine_fn mirror_co_perform(void *opaque)
     AioContext *aio_context;
     MirrorOp *op = opaque;
     bool failed_on_read = false;
-    uint64_t bytes_handled = op->bytes;
     int ret;
 
     aio_context = blk_get_aio_context(op->s->common.blk);
     aio_context_acquire(aio_context);
-
-    if (op->mirror_method == MIRROR_METHOD_COPY) {
-        int64_t original_offset = op->offset;
-        mirror_align_for_copy(op->s, &op->offset, &op->bytes);
-
-        /* Aligned end minus original start */
-        bytes_handled = (op->offset + op->bytes) - original_offset;
-        /* @bytes cannot exceed s->buf_size (see mirror_align_for_copy()), and
-         * because @offset is rounded to clusters (and cluster sizes are stored
-         * in ints), this cannot exceed BDRV_REQUEST_MAX_BYTES + INT_MAX */
-        assert(bytes_handled <= UINT_MAX);
-    }
-    *op->bytes_handled = bytes_handled;
 
     switch (op->mirror_method) {
     case MIRROR_METHOD_COPY:
@@ -427,20 +408,24 @@ static void coroutine_fn mirror_co_perform(void *opaque)
     mirror_iteration_done(op, ret);
 }
 
-static unsigned mirror_perform(MirrorBlockJob *s, int64_t offset,
-                               unsigned bytes, MirrorMethod mirror_method)
+/* If mirror_method == MIRROR_METHOD_COPY, *offset and *bytes will be
+ * aligned as necessary */
+static void mirror_perform(MirrorBlockJob *s, int64_t *offset,
+                           int64_t *bytes, MirrorMethod mirror_method)
 {
     MirrorOp *op;
     Coroutine *co;
-    int64_t bytes_handled = -1;
+
+    if (mirror_method == MIRROR_METHOD_COPY) {
+        mirror_align_for_copy(s, offset, bytes);
+    }
 
     op = g_new(MirrorOp, 1);
     *op = (MirrorOp){
         .s              = s,
         .mirror_method  = mirror_method,
-        .offset         = offset,
-        .bytes          = bytes,
-        .bytes_handled  = &bytes_handled,
+        .offset         = *offset,
+        .bytes          = *bytes,
     };
     qemu_co_queue_init(&op->waiting_requests);
 
@@ -448,17 +433,6 @@ static unsigned mirror_perform(MirrorBlockJob *s, int64_t offset,
 
     QTAILQ_INSERT_TAIL(&s->ops_in_flight, op, next);
     qemu_coroutine_enter(co);
-    /* At this point, ownership of op has been moved to the coroutine
-     * and the object may already be freed */
-
-    /* Assert that this value has been set */
-    assert(bytes_handled >= 0);
-
-    /* Same assertion as in mirror_co_perform() when copying (and for
-     * writing zeroes and discarding, bytes_handled == op->bytes,
-     * which is the @bytes parameter given to this function) */
-    assert(bytes_handled <= UINT_MAX);
-    return bytes_handled;
 }
 
 static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
@@ -578,7 +552,7 @@ static uint64_t coroutine_fn mirror_iteration(MirrorBlockJob *s)
         }
 
         io_bytes = mirror_clip_bytes(s, offset, io_bytes);
-        io_bytes = mirror_perform(s, offset, io_bytes, mirror_method);
+        mirror_perform(s, &offset, &io_bytes, mirror_method);
         if (mirror_method != MIRROR_METHOD_COPY && write_zeroes_ok) {
             io_bytes_acct = 0;
         } else {
@@ -770,8 +744,8 @@ static int coroutine_fn mirror_dirty_init(MirrorBlockJob *s)
 
         s->initial_zeroing_ongoing = true;
         for (offset = 0; offset < s->bdev_length; ) {
-            int bytes = MIN(s->bdev_length - offset,
-                            QEMU_ALIGN_DOWN(INT_MAX, s->granularity));
+            int64_t bytes = MIN(s->bdev_length - offset,
+                                QEMU_ALIGN_DOWN(INT_MAX, s->granularity));
 
             mirror_throttle(s);
 
@@ -787,7 +761,7 @@ static int coroutine_fn mirror_dirty_init(MirrorBlockJob *s)
                 continue;
             }
 
-            mirror_perform(s, offset, bytes, MIRROR_METHOD_ZERO);
+            mirror_perform(s, &offset, &bytes, MIRROR_METHOD_ZERO);
             offset += bytes;
         }
 
