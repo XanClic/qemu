@@ -983,7 +983,7 @@ static int img_commit(int argc, char **argv)
     if (!blk) {
         return 1;
     }
-    bs = blk_bs(blk);
+    bs = bdrv_skip_implicit_filters(blk_bs(blk));
 
     qemu_progress_init(progress, 1.f);
     qemu_progress_print(0.f, 100);
@@ -1000,7 +1000,7 @@ static int img_commit(int argc, char **argv)
         /* This is different from QMP, which by default uses the deepest file in
          * the backing chain (i.e., the very base); however, the traditional
          * behavior of qemu-img commit is using the immediate backing file. */
-        base_bs = backing_bs(bs);
+        base_bs = bdrv_filtered_cow_bs(bs);
         if (!base_bs) {
             error_setg(&local_err, "Image does not have a backing file");
             goto done;
@@ -2680,11 +2680,12 @@ static int get_block_status(BlockDriverState *bs, int64_t offset,
         if (ret & (BDRV_BLOCK_ZERO|BDRV_BLOCK_DATA)) {
             break;
         }
-        bs = backing_bs(bs);
+        bs = bdrv_filtered_cow_bs(bs);
         if (bs == NULL) {
             ret = 0;
             break;
         }
+        bs = bdrv_skip_implicit_filters(bs);
 
         depth++;
     }
@@ -2814,7 +2815,7 @@ static int img_map(int argc, char **argv)
     if (!blk) {
         return 1;
     }
-    bs = blk_bs(blk);
+    bs = bdrv_skip_implicit_filters(blk_bs(blk));
 
     if (output_format == OFORMAT_HUMAN) {
         printf("%-16s%-16s%-16s%s\n", "Offset", "Length", "Mapped to", "File");

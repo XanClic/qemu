@@ -126,10 +126,9 @@ static void commit_complete(BlockJob *job, void *opaque)
      * filter driver from the backing chain. Do this as the final step so that
      * the 'consistent read' permission can be granted.  */
     if (remove_commit_top_bs) {
-        bdrv_child_try_set_perm(commit_top_bs->backing, 0, BLK_PERM_ALL,
-                                &error_abort);
-        bdrv_replace_node(commit_top_bs, backing_bs(commit_top_bs),
-                          &error_abort);
+        BdrvChild *filtered_top = bdrv_filtered_rw_child(commit_top_bs);
+        bdrv_child_try_set_perm(filtered_top, 0, BLK_PERM_ALL, &error_abort);
+        bdrv_replace_node(commit_top_bs, filtered_top->bs, &error_abort);
     }
 
     bdrv_unref(commit_top_bs);
@@ -339,9 +338,13 @@ void commit_start(const char *job_id, BlockDriverState *bs,
     bdrv_unref(commit_top_bs);
 
     /* Block all nodes between top and base, because they will
-     * disappear from the chain after this operation. */
+     * disappear from the chain after this operation.
+     * Note that this assumes that the user is fine with removing all
+     * nodes (including R/W filters) between top and base.  Assuring
+     * this is the responsibility of the interface (i.e. whoever calls
+     * commit_start()). */
     assert(bdrv_chain_contains(top, base));
-    for (iter = top; iter != base; iter = backing_bs(iter)) {
+    for (iter = top; iter != base; iter = bdrv_filtered_bs(iter)) {
         /* XXX BLK_PERM_WRITE needs to be allowed so we don't block ourselves
          * at s->base (if writes are blocked for a node, they are also blocked
          * for its backing file). The other options would be a second filter
@@ -418,20 +421,23 @@ int bdrv_commit(BlockDriverState *bs)
     if (!drv)
         return -ENOMEDIUM;
 
-    if (!bs->backing) {
+    backing_file_bs = bdrv_filtered_cow_bs(bs);
+
+    if (!backing_file_bs) {
         return -ENOTSUP;
     }
 
     if (bdrv_op_is_blocked(bs, BLOCK_OP_TYPE_COMMIT_SOURCE, NULL) ||
-        bdrv_op_is_blocked(bs->backing->bs, BLOCK_OP_TYPE_COMMIT_TARGET, NULL)) {
+        bdrv_op_is_blocked(backing_file_bs, BLOCK_OP_TYPE_COMMIT_TARGET, NULL))
+    {
         return -EBUSY;
     }
 
-    ro = bs->backing->bs->read_only;
-    open_flags =  bs->backing->bs->open_flags;
+    ro = backing_file_bs->read_only;
+    open_flags =  backing_file_bs->open_flags;
 
     if (ro) {
-        if (bdrv_reopen(bs->backing->bs, open_flags | BDRV_O_RDWR, NULL)) {
+        if (bdrv_reopen(backing_file_bs, open_flags | BDRV_O_RDWR, NULL)) {
             return -EACCES;
         }
     }
@@ -446,8 +452,6 @@ int bdrv_commit(BlockDriverState *bs)
     }
 
     /* Insert commit_top block node above backing, so we can write to it */
-    backing_file_bs = backing_bs(bs);
-
     commit_top_bs = bdrv_new_open_driver(&bdrv_commit_top, NULL, BDRV_O_RDWR,
                                          &local_err);
     if (commit_top_bs == NULL) {
@@ -533,15 +537,13 @@ ro_cleanup:
     qemu_vfree(buf);
 
     blk_unref(backing);
-    if (backing_file_bs) {
-        bdrv_set_backing_hd(bs, backing_file_bs, &error_abort);
-    }
+    bdrv_set_backing_hd(bs, backing_file_bs, &error_abort);
     bdrv_unref(commit_top_bs);
     blk_unref(src);
 
     if (ro) {
         /* ignoring error return here */
-        bdrv_reopen(bs->backing->bs, open_flags & ~BDRV_O_RDWR, NULL);
+        bdrv_reopen(backing_file_bs, open_flags & ~BDRV_O_RDWR, NULL);
     }
 
     return ret;

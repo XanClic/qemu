@@ -2189,7 +2189,7 @@ static void bdrv_parent_cb_resize(BlockDriverState *bs)
 }
 
 /*
- * Sets the backing file link of a BDS. A new reference is created; callers
+ * Sets the bs->backing link of a BDS. A new reference is created; callers
  * which don't need their own reference any more must call bdrv_unref().
  */
 void bdrv_set_backing_hd(BlockDriverState *bs, BlockDriverState *backing_hd,
@@ -2242,7 +2242,7 @@ int bdrv_open_backing_file(BlockDriverState *bs, QDict *parent_options,
     QDict *tmp_parent_options = NULL;
     Error *local_err = NULL;
 
-    if (bs->backing != NULL) {
+    if (bdrv_filtered_cow_child(bs) != NULL) {
         goto free_exit;
     }
 
@@ -3540,8 +3540,8 @@ int bdrv_change_backing_file(BlockDriverState *bs,
 BlockDriverState *bdrv_find_overlay(BlockDriverState *active,
                                     BlockDriverState *bs)
 {
-    while (active && bs != backing_bs(active)) {
-        active = backing_bs(active);
+    while (active && bs != bdrv_filtered_bs(active)) {
+        active = bdrv_filtered_bs(active);
     }
 
     return active;
@@ -3788,7 +3788,8 @@ bool bdrv_is_sg(BlockDriverState *bs)
 
 bool bdrv_is_encrypted(BlockDriverState *bs)
 {
-    if (bs->backing && bs->backing->bs->encrypted) {
+    BdrvChild *filtered = bdrv_filtered_child(bs);
+    if (filtered && filtered->bs->encrypted) {
         return true;
     }
     return bs->encrypted;
@@ -3930,7 +3931,22 @@ BlockDriverState *bdrv_lookup_bs(const char *device,
 bool bdrv_chain_contains(BlockDriverState *top, BlockDriverState *base)
 {
     while (top && top != base) {
-        top = backing_bs(top);
+        top = bdrv_filtered_bs(top);
+    }
+
+    return top != NULL;
+}
+
+/* Same as bdrv_chain_contains(), but skip implicitly added R/W filter
+ * nodes and do not move past explicitly added R/W filters. */
+bool bdrv_legacy_chain_contains(BlockDriverState *top, BlockDriverState *base)
+{
+    top = bdrv_skip_implicit_filters(top);
+    while (top && top != base) {
+        top = bdrv_filtered_cow_bs(top);
+        if (top) {
+            top = bdrv_skip_implicit_filters(top);
+        }
     }
 
     return top != NULL;
@@ -3998,9 +4014,9 @@ int bdrv_has_zero_init(BlockDriverState *bs)
         return 0;
     }
 
-    /* If BS is a copy on write image, it is initialized to
-       the contents of the base image, which may not be zeroes.  */
-    if (bs->backing) {
+    /* If @bs has a filtered child, it is initialized to the contents
+     * of that image, which may not be zeroes. */
+    if (bdrv_filtered_child(bs)) {
         return 0;
     }
     if (bs->drv->bdrv_has_zero_init) {
@@ -4018,7 +4034,7 @@ bool bdrv_unallocated_blocks_are_zero(BlockDriverState *bs)
 {
     BlockDriverInfo bdi;
 
-    if (bs->backing) {
+    if (bdrv_filtered_child(bs)) {
         return false;
     }
 
@@ -4042,16 +4058,6 @@ bool bdrv_can_write_zeroes_with_unmap(BlockDriverState *bs)
     }
 
     return false;
-}
-
-const char *bdrv_get_encrypted_filename(BlockDriverState *bs)
-{
-    if (bs->backing && bs->backing->bs->encrypted)
-        return bs->backing_file;
-    else if (bs->encrypted)
-        return bs->filename;
-    else
-        return NULL;
 }
 
 void bdrv_get_backing_filename(BlockDriverState *bs,
@@ -4173,13 +4179,20 @@ BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
 
     is_protocol = path_has_protocol(backing_file);
 
-    for (curr_bs = bs; curr_bs->backing; curr_bs = curr_bs->backing->bs) {
+    /* Being largely a legacy function, skip implicitly added filters
+     * here */
+    for (curr_bs = bdrv_skip_implicit_filters(bs);
+         bdrv_filtered_cow_child(curr_bs) != NULL;
+         curr_bs = bdrv_skip_implicit_filters(bdrv_filtered_cow_bs(curr_bs)))
+    {
+        BlockDriverState *bs_below;
+        bs_below = bdrv_skip_implicit_filters(bdrv_filtered_cow_bs(curr_bs));
 
         /* If either of the filename paths is actually a protocol, then
          * compare unmodified paths; otherwise make paths relative */
         if (is_protocol || path_has_protocol(curr_bs->backing_file)) {
             if (strcmp(backing_file, curr_bs->backing_file) == 0) {
-                retval = curr_bs->backing->bs;
+                retval = bs_below;
                 break;
             }
             /* Also check against the full backing filename for the image */
@@ -4187,7 +4200,7 @@ BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
                                            &local_error);
             if (local_error == NULL) {
                 if (strcmp(backing_file, backing_file_full) == 0) {
-                    retval = curr_bs->backing->bs;
+                    retval = bs_below;
                     break;
                 }
             } else {
@@ -4215,7 +4228,7 @@ BlockDriverState *bdrv_find_backing_image(BlockDriverState *bs,
             }
 
             if (strcmp(backing_file_full, filename_full) == 0) {
-                retval = curr_bs->backing->bs;
+                retval = bs_below;
                 break;
             }
         }
@@ -4907,11 +4920,14 @@ bool bdrv_recurse_is_first_non_filter(BlockDriverState *bs,
         return false;
     }
 
-    /* the code reached a non block filter driver -> check if the bs is
-     * the same as the candidate. It's the recursion termination condition.
-     */
+    /* Termination condition */
+    if (bs == candidate) {
+        return true;
+    }
+
+    /* @bs is not a filter, so do not proceed past it */
     if (!bs->drv->is_filter) {
-        return bs == candidate;
+        return false;
     }
     /* Down this path the driver is a block filter driver */
 
@@ -4927,9 +4943,13 @@ bool bdrv_recurse_is_first_non_filter(BlockDriverState *bs,
     return false;
 }
 
-/* This function checks if the candidate is the first non filter bs down it's
- * bs chain. Since we don't have pointers to parents it explore all bs chains
- * from the top. Some filters can choose not to pass down the recursion.
+/* This function checks if the candidate has only filter nodes above
+ * it.  Since we want to avoid using bs->parents, it explores all BDS
+ * chains from the top.
+ * Some filter nodes may choose not to pass down the recursion.
+ *
+ * Note that despite this function's name, @candidate may be a filter,
+ * too.
  */
 bool bdrv_is_first_non_filter(BlockDriverState *candidate)
 {
@@ -4978,7 +4998,8 @@ BlockDriverState *check_to_replace_node(BlockDriverState *parent_bs,
      * blocked by the backing blockers.
      */
     if (!bdrv_recurse_is_first_non_filter(parent_bs, to_replace_bs)) {
-        error_setg(errp, "Only top most non filter can be replaced");
+        error_setg(errp, "The node to be replaced has non-filter parent nodes, "
+                   "which is not allowed");
         to_replace_bs = NULL;
         goto out;
     }
@@ -5206,4 +5227,95 @@ bool bdrv_can_store_new_dirty_bitmap(BlockDriverState *bs, const char *name,
     }
 
     return drv->bdrv_can_store_new_dirty_bitmap(bs, name, granularity, errp);
+}
+
+/*
+ * Return the child that @bs acts as an overlay for, and from which data may be
+ * copied in COW or COR operations.  Usually this is the backing file.
+ */
+BdrvChild *bdrv_filtered_cow_child(BlockDriverState *bs)
+{
+    if (!bs->drv) {
+        return NULL;
+    }
+
+    if (bs->drv->is_filter) {
+        return NULL;
+    }
+
+    return bs->backing;
+}
+
+/*
+ * If @bs acts as a pass-through filter for one of its children,
+ * return that child.  "Pass-through" means that write operations to
+ * @bs are forwarded to that child instead of triggering COW.
+ */
+BdrvChild *bdrv_filtered_rw_child(BlockDriverState *bs)
+{
+    if (!bs->drv) {
+        return NULL;
+    }
+
+    if (!bs->drv->is_filter) {
+        return NULL;
+    }
+
+    return bs->backing ?: bs->file;
+}
+
+/*
+ * Return any filtered child, independently on how it reacts to write
+ * accesses and whether data is copied onto this BDS through COR.
+ */
+BdrvChild *bdrv_filtered_child(BlockDriverState *bs)
+{
+    BdrvChild *cow_child = bdrv_filtered_cow_child(bs);
+    BdrvChild *rw_child = bdrv_filtered_rw_child(bs);
+
+    /* There can only be one filtered child at a time */
+    assert(!(cow_child && rw_child));
+
+    return cow_child ?: rw_child;
+}
+
+static BlockDriverState *bdrv_skip_filters(BlockDriverState *bs,
+                                           bool stop_on_explicit_filter)
+{
+    BdrvChild *filtered;
+
+    while (!(stop_on_explicit_filter && !bs->implicit)) {
+        filtered = bdrv_filtered_rw_child(bs);
+        if (!filtered) {
+            break;
+        }
+        bs = filtered->bs;
+    }
+    /* Note that this treats nodes with bs->drv == NULL as not being
+     * R/W filters (bs->drv == NULL should be replaced by something
+     * else anyway).
+     * The advantage of this behavior is that this function will thus
+     * always return a non-NULL value. */
+
+    return bs;
+}
+
+/*
+ * Return the first BDS that has not been added implicitly or that
+ * does not have an RW-filtered child down the chain starting from @bs
+ * (including @bs itself), or NULL if no such unique BDS can be found.
+ */
+BlockDriverState *bdrv_skip_implicit_filters(BlockDriverState *bs)
+{
+    return bdrv_skip_filters(bs, true);
+}
+
+/*
+ * Return the first BDS that does not have an RW-filtered child down
+ * the chain starting from @bs (including @bs itself), or NULL if no
+ * such unique BDS can be found.
+ */
+BlockDriverState *bdrv_skip_rw_filters(BlockDriverState *bs)
+{
+    return bdrv_skip_filters(bs, false);
 }

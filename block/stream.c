@@ -154,7 +154,7 @@ static void coroutine_fn stream_run(void *opaque)
         } else if (ret >= 0) {
             /* Copy if allocated in the intermediate images.  Limit to the
              * known-unallocated area [offset, offset+n*BDRV_SECTOR_SIZE).  */
-            ret = bdrv_is_allocated_above(backing_bs(bs), base,
+            ret = bdrv_is_allocated_above(bdrv_filtered_cow_bs(bs), base,
                                           offset, n, &n);
 
             /* Finish early if end of backing file has been reached */
@@ -258,7 +258,9 @@ void stream_start(const char *job_id, BlockDriverState *bs,
      * disappear from the chain after this operation. The streaming job reads
      * every block only once, assuming that it doesn't change, so block writes
      * and resizes. */
-    for (iter = backing_bs(bs); iter && iter != base; iter = backing_bs(iter)) {
+    for (iter = bdrv_filtered_cow_bs(bs); iter && iter != base;
+         iter = bdrv_filtered_bs(iter))
+    {
         block_job_add_bdrv(&s->common, "intermediate node", iter, 0,
                            BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED,
                            &error_abort);

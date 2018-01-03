@@ -1195,7 +1195,7 @@ void hmp_commit(Monitor *mon, const QDict *qdict)
             return;
         }
 
-        bs = blk_bs(blk);
+        bs = bdrv_skip_implicit_filters(blk_bs(blk));
         aio_context = bdrv_get_aio_context(bs);
         aio_context_acquire(aio_context);
 
@@ -3064,8 +3064,19 @@ void qmp_block_stream(bool has_job_id, const char *job_id, const char *device,
         on_error = BLOCKDEV_ON_ERROR_REPORT;
     }
 
-    bs = bdrv_lookup_bs(device, device, errp);
+    bs = bdrv_lookup_bs(NULL, device, NULL);
     if (!bs) {
+        bs = bdrv_lookup_bs(device, NULL, errp);
+        if (!bs) {
+            return;
+        }
+
+        bs = bdrv_skip_implicit_filters(bs);
+    }
+
+    if (!bdrv_filtered_cow_child(bs)) {
+        error_setg(errp, "The node does not have a child from which data can "
+                   "be copied");
         return;
     }
 
@@ -3093,6 +3104,9 @@ void qmp_block_stream(bool has_job_id, const char *job_id, const char *device,
         if (!base_bs) {
             goto out;
         }
+        /* Streaming moves data through all nodes in the chain in the
+         * "normal" order, so we can use bdrv_chain_contains() instead
+         * of bdrv_legacy_chain_contains() here */
         if (bs == base_bs || !bdrv_chain_contains(bs, base_bs)) {
             error_setg(errp, "Node '%s' is not a backing image of '%s'",
                        base_node, device);
@@ -3103,7 +3117,7 @@ void qmp_block_stream(bool has_job_id, const char *job_id, const char *device,
     }
 
     /* Check for op blockers in the whole chain between bs and base */
-    for (iter = bs; iter && iter != base_bs; iter = backing_bs(iter)) {
+    for (iter = bs; iter && iter != base_bs; iter = bdrv_filtered_bs(iter)) {
         if (bdrv_op_is_blocked(iter, BLOCK_OP_TYPE_STREAM, errp)) {
             goto out;
         }
@@ -3212,7 +3226,9 @@ void qmp_block_commit(bool has_job_id, const char *job_id, const char *device,
 
     assert(bdrv_get_aio_context(base_bs) == aio_context);
 
-    for (iter = top_bs; iter != backing_bs(base_bs); iter = backing_bs(iter)) {
+    for (iter = top_bs; iter != bdrv_filtered_bs(base_bs);
+         iter = bdrv_filtered_bs(iter))
+    {
         if (bdrv_op_is_blocked(iter, BLOCK_OP_TYPE_COMMIT_TARGET, errp)) {
             goto out;
         }
@@ -3221,6 +3237,12 @@ void qmp_block_commit(bool has_job_id, const char *job_id, const char *device,
     /* Do not allow attempts to commit an image into itself */
     if (top_bs == base_bs) {
         error_setg(errp, "cannot commit an image into itself");
+        goto out;
+    }
+    if (!bdrv_legacy_chain_contains(top_bs, base_bs)) {
+        /* We have to disallow this until the user can give explicit
+         * consent */
+        error_setg(errp, "Cannot commit through explicit filter nodes");
         goto out;
     }
 
@@ -3308,7 +3330,11 @@ static BlockJob *do_drive_backup(DriveBackup *backup, BlockJobTxn *txn,
     /* See if we have a backing HD we can use to create our new image
      * on top of. */
     if (backup->sync == MIRROR_SYNC_MODE_TOP) {
-        source = backing_bs(bs);
+        /* Backup will not replace the source by the target, so none
+         * of the filters skipped here will be removed (in contrast to
+         * mirror).  Therefore, we can skip all of them when looking
+         * for the first COW relationship. */
+        source = bdrv_filtered_cow_bs(bdrv_skip_rw_filters(bs));
         if (!source) {
             backup->sync = MIRROR_SYNC_MODE_FULL;
         }
@@ -3478,7 +3504,7 @@ void qmp_blockdev_backup(BlockdevBackup *arg, Error **errp)
  **/
 static void blockdev_mirror_common(const char *job_id, BlockDriverState *bs,
                                    BlockDriverState *target,
-                                   bool has_replaces, const char *replaces,
+                                   const char *replaces,
                                    enum MirrorSyncMode sync,
                                    BlockMirrorBackingMode backing_mode,
                                    bool has_speed, int64_t speed,
@@ -3542,11 +3568,38 @@ static void blockdev_mirror_common(const char *job_id, BlockDriverState *bs,
         sync = MIRROR_SYNC_MODE_FULL;
     }
 
+    if (replaces) {
+        BlockDriverState *to_replace_bs;
+        AioContext *replace_aio_context;
+        int64_t bs_size, replace_size;
+
+        bs_size = bdrv_getlength(bs);
+        if (bs_size < 0) {
+            error_setg(errp, "Failed to query device's size");
+            return;
+        }
+
+        to_replace_bs = check_to_replace_node(bs, replaces, errp);
+        if (!to_replace_bs) {
+            return;
+        }
+
+        replace_aio_context = bdrv_get_aio_context(to_replace_bs);
+        aio_context_acquire(replace_aio_context);
+        replace_size = bdrv_getlength(to_replace_bs);
+        aio_context_release(replace_aio_context);
+
+        if (bs_size != replace_size) {
+            error_setg(errp, "Cannot replace image with a mirror image of "
+                             "different size");
+            return;
+        }
+    }
+
     /* pass the node name to replace to mirror start since it's loose coupling
      * and will allow to check whether the node still exist at mirror completion
      */
-    mirror_start(job_id, bs, target,
-                 has_replaces ? replaces : NULL,
+    mirror_start(job_id, bs, target, replaces,
                  speed, granularity, buf_size, sync, backing_mode,
                  on_source_error, on_target_error, unmap, filter_node_name,
                  copy_mode, errp);
@@ -3554,7 +3607,7 @@ static void blockdev_mirror_common(const char *job_id, BlockDriverState *bs,
 
 void qmp_drive_mirror(DriveMirror *arg, Error **errp)
 {
-    BlockDriverState *bs;
+    BlockDriverState *bs, *unfiltered_bs;
     BlockDriverState *source, *target_bs;
     AioContext *aio_context;
     BlockMirrorBackingMode backing_mode;
@@ -3563,11 +3616,20 @@ void qmp_drive_mirror(DriveMirror *arg, Error **errp)
     int flags;
     int64_t size;
     const char *format = arg->format;
+    const char *replaces_node_name = NULL;
 
     bs = qmp_get_root_bs(arg->device, errp);
     if (!bs) {
         return;
     }
+
+    /* If the user has not instructed us otherwise, we should let the
+     * block job run from @bs (thus taking into account all filters on
+     * it) but replace @unfiltered_bs when it finishes (thus not
+     * removing those filters).
+     * (And if there are any explicit filters, we should assume the
+     *  user knows how to use the @replaces option.) */
+    unfiltered_bs = bdrv_skip_implicit_filters(bs);
 
     aio_context = bdrv_get_aio_context(bs);
     aio_context_acquire(aio_context);
@@ -3582,8 +3644,14 @@ void qmp_drive_mirror(DriveMirror *arg, Error **errp)
     }
 
     flags = bs->open_flags | BDRV_O_RDWR;
-    source = backing_bs(bs);
+    source = bdrv_filtered_cow_bs(unfiltered_bs);
     if (!source && arg->sync == MIRROR_SYNC_MODE_TOP) {
+        if (bdrv_filtered_bs(unfiltered_bs)) {
+            /* @unfiltered_bs is an explicit filter */
+            error_setg(errp, "Cannot perform sync=top mirror through an "
+                       "explicitly added filter node on the source");
+            goto out;
+        }
         arg->sync = MIRROR_SYNC_MODE_FULL;
     }
     if (arg->sync == MIRROR_SYNC_MODE_NONE) {
@@ -3597,33 +3665,16 @@ void qmp_drive_mirror(DriveMirror *arg, Error **errp)
     }
 
     if (arg->has_replaces) {
-        BlockDriverState *to_replace_bs;
-        AioContext *replace_aio_context;
-        int64_t replace_size;
-
+        /* If the user explicitly specified @replaces, @node-name has
+         * to be given as well */
         if (!arg->has_node_name) {
             error_setg(errp, "a node-name must be provided when replacing a"
                              " named node of the graph");
             goto out;
         }
-
-        to_replace_bs = check_to_replace_node(bs, arg->replaces, &local_err);
-
-        if (!to_replace_bs) {
-            error_propagate(errp, local_err);
-            goto out;
-        }
-
-        replace_aio_context = bdrv_get_aio_context(to_replace_bs);
-        aio_context_acquire(replace_aio_context);
-        replace_size = bdrv_getlength(to_replace_bs);
-        aio_context_release(replace_aio_context);
-
-        if (size != replace_size) {
-            error_setg(errp, "cannot replace image with a mirror image of "
-                             "different size");
-            goto out;
-        }
+        replaces_node_name = arg->replaces;
+    } else if (unfiltered_bs != bs) {
+        replaces_node_name = unfiltered_bs->node_name;
     }
 
     if (arg->mode == NEW_IMAGE_MODE_ABSOLUTE_PATHS) {
@@ -3682,7 +3733,7 @@ void qmp_drive_mirror(DriveMirror *arg, Error **errp)
     bdrv_set_aio_context(target_bs, aio_context);
 
     blockdev_mirror_common(arg->has_job_id ? arg->job_id : NULL, bs, target_bs,
-                           arg->has_replaces, arg->replaces, arg->sync,
+                           replaces_node_name, arg->sync,
                            backing_mode, arg->has_speed, arg->speed,
                            arg->has_granularity, arg->granularity,
                            arg->has_buf_size, arg->buf_size,
@@ -3714,15 +3765,25 @@ void qmp_blockdev_mirror(bool has_job_id, const char *job_id,
                          bool has_copy_mode, MirrorCopyMode copy_mode,
                          Error **errp)
 {
-    BlockDriverState *bs;
+    BlockDriverState *bs, *unfiltered_bs;
     BlockDriverState *target_bs;
     AioContext *aio_context;
     BlockMirrorBackingMode backing_mode = MIRROR_LEAVE_BACKING_CHAIN;
-    Error *local_err = NULL;
+
+    if (!has_replaces) {
+        replaces = NULL;
+    }
 
     bs = qmp_get_root_bs(device, errp);
     if (!bs) {
         return;
+    }
+
+    /* Same as in qmp_drive_mirror(): We want to run the job from @bs,
+     * but we want to replace @unfiltered_bs on completion. */
+    unfiltered_bs = bdrv_skip_implicit_filters(bs);
+    if (!replaces && unfiltered_bs != bs) {
+        replaces = unfiltered_bs->node_name;
     }
 
     target_bs = bdrv_lookup_bs(target, target, errp);
@@ -3736,8 +3797,7 @@ void qmp_blockdev_mirror(bool has_job_id, const char *job_id,
     bdrv_set_aio_context(target_bs, aio_context);
 
     blockdev_mirror_common(has_job_id ? job_id : NULL, bs, target_bs,
-                           has_replaces, replaces, sync, backing_mode,
-                           has_speed, speed,
+                           replaces, sync, backing_mode, has_speed, speed,
                            has_granularity, granularity,
                            has_buf_size, buf_size,
                            has_on_source_error, on_source_error,
@@ -3745,8 +3805,7 @@ void qmp_blockdev_mirror(bool has_job_id, const char *job_id,
                            true, true,
                            has_filter_node_name, filter_node_name,
                            has_copy_mode, copy_mode,
-                           &local_err);
-    error_propagate(errp, local_err);
+                           errp);
 
     aio_context_release(aio_context);
 }

@@ -49,8 +49,6 @@ typedef struct MirrorBlockJob {
     char *replaces;
     /* The BDS to replace */
     BlockDriverState *to_replace;
-    /* Used to block operations on the drive-mirror-replace target */
-    Error *replace_blocker;
     bool is_none_mode;
     BlockMirrorBackingMode backing_mode;
     MirrorCopyMode copy_mode;
@@ -623,7 +621,7 @@ static void mirror_exit(BlockJob *job, void *opaque)
     MirrorExitData *data = opaque;
     MirrorBDSOpaque *bs_opaque = s->mirror_top_bs->opaque;
     AioContext *replace_aio_context = NULL;
-    BlockDriverState *src = s->mirror_top_bs->backing->bs;
+    BlockDriverState *src = bdrv_filtered_rw_bs(s->mirror_top_bs);
     BlockDriverState *target_bs = blk_bs(s->target);
     BlockDriverState *mirror_top_bs = s->mirror_top_bs;
     Error *local_err = NULL;
@@ -649,12 +647,13 @@ static void mirror_exit(BlockJob *job, void *opaque)
 
     /* We don't access the source any more. Dropping any WRITE/RESIZE is
      * required before it could become a backing file of target_bs. */
-    bdrv_child_try_set_perm(mirror_top_bs->backing, 0, BLK_PERM_ALL,
-                            &error_abort);
+    bdrv_child_try_set_perm(bdrv_filtered_rw_child(mirror_top_bs),
+                            0, BLK_PERM_ALL, &error_abort);
     if (s->backing_mode == MIRROR_SOURCE_BACKING_CHAIN) {
         BlockDriverState *backing = s->is_none_mode ? src : s->base;
-        if (backing_bs(target_bs) != backing) {
-            bdrv_set_backing_hd(target_bs, backing, &local_err);
+        BlockDriverState *unfiltered_target = bdrv_skip_rw_filters(target_bs);
+        if (bdrv_filtered_cow_bs(unfiltered_target) != backing) {
+            bdrv_set_backing_hd(unfiltered_target, backing, &local_err);
             if (local_err) {
                 error_report_err(local_err);
                 data->ret = -EPERM;
@@ -688,8 +687,6 @@ static void mirror_exit(BlockJob *job, void *opaque)
         }
     }
     if (s->to_replace) {
-        bdrv_op_unblock_all(s->to_replace, s->replace_blocker);
-        error_free(s->replace_blocker);
         bdrv_unref(s->to_replace);
     }
     if (replace_aio_context) {
@@ -703,9 +700,10 @@ static void mirror_exit(BlockJob *job, void *opaque)
      * valid. Also give up permissions on mirror_top_bs->backing, which might
      * block the removal. */
     block_job_remove_all_bdrv(job);
-    bdrv_child_try_set_perm(mirror_top_bs->backing, 0, BLK_PERM_ALL,
-                            &error_abort);
-    bdrv_replace_node(mirror_top_bs, backing_bs(mirror_top_bs), &error_abort);
+    bdrv_child_try_set_perm(bdrv_filtered_rw_child(mirror_top_bs),
+                            0, BLK_PERM_ALL, &error_abort);
+    bdrv_replace_node(mirror_top_bs, bdrv_filtered_rw_bs(mirror_top_bs),
+                      &error_abort);
 
     /* We just changed the BDS the job BB refers to (with either or both of the
      * bdrv_replace_node() calls), so switch the BB back so the cleanup does
@@ -1082,7 +1080,8 @@ static void mirror_complete(BlockJob *job, Error **errp)
         }
     }
 
-    /* block all operations on to_replace bs */
+    /* Look for s->replaces and make sure it stays around for
+     * mirror_exit() */
     if (s->replaces) {
         AioContext *replace_aio_context;
 
@@ -1094,16 +1093,7 @@ static void mirror_complete(BlockJob *job, Error **errp)
 
         replace_aio_context = bdrv_get_aio_context(s->to_replace);
         aio_context_acquire(replace_aio_context);
-
-        /* TODO Translate this into permission system. Current definition of
-         * GRAPH_MOD would require to request it for the parents; they might
-         * not even be BlockDriverStates, however, so a BdrvChild can't address
-         * them. May need redefinition of GRAPH_MOD. */
-        error_setg(&s->replace_blocker,
-                   "block device is in use by block-job-complete");
-        bdrv_op_block_all(s->to_replace, s->replace_blocker);
         bdrv_ref(s->to_replace);
-
         aio_context_release(replace_aio_context);
     }
 
@@ -1539,7 +1529,9 @@ static void mirror_start_job(const char *job_id, BlockDriverState *bs,
      * any jobs in them must be blocked */
     if (target_is_backing) {
         BlockDriverState *iter;
-        for (iter = backing_bs(bs); iter != target; iter = backing_bs(iter)) {
+        for (iter = bdrv_filtered_bs(bs); iter != target;
+             iter = bdrv_filtered_bs(iter))
+        {
             /* XXX BLK_PERM_WRITE needs to be allowed so we don't block
              * ourselves at s->base (if writes are blocked for a node, they are
              * also blocked for its backing file). The other options would be a
@@ -1571,9 +1563,10 @@ fail:
         block_job_early_fail(&s->common);
     }
 
-    bdrv_child_try_set_perm(mirror_top_bs->backing, 0, BLK_PERM_ALL,
-                            &error_abort);
-    bdrv_replace_node(mirror_top_bs, backing_bs(mirror_top_bs), &error_abort);
+    bdrv_child_try_set_perm(bdrv_filtered_rw_child(mirror_top_bs),
+                            0, BLK_PERM_ALL, &error_abort);
+    bdrv_replace_node(mirror_top_bs, bdrv_filtered_rw_bs(mirror_top_bs),
+                      &error_abort);
 
     bdrv_unref(mirror_top_bs);
 }
@@ -1595,7 +1588,7 @@ void mirror_start(const char *job_id, BlockDriverState *bs,
         return;
     }
     is_none_mode = mode == MIRROR_SYNC_MODE_NONE;
-    base = mode == MIRROR_SYNC_MODE_TOP ? backing_bs(bs) : NULL;
+    base = mode == MIRROR_SYNC_MODE_TOP ? bdrv_filtered_cow_bs(bs) : NULL;
     mirror_start_job(job_id, bs, BLOCK_JOB_DEFAULT, target, replaces,
                      speed, granularity, buf_size, backing_mode,
                      on_source_error, on_target_error, unmap, NULL, NULL,
