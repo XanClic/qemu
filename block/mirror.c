@@ -1394,6 +1394,8 @@ static BlockDriver bdrv_mirror_top = {
     .bdrv_refresh_filename      = bdrv_mirror_top_refresh_filename,
     .bdrv_close                 = bdrv_mirror_top_close,
     .bdrv_child_perm            = bdrv_mirror_top_child_perm,
+
+    .is_filter                  = true,
 };
 
 static void mirror_start_job(const char *job_id, BlockDriverState *bs,
