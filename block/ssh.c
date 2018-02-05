@@ -1194,6 +1194,24 @@ static void ssh_refresh_filename(BlockDriverState *bs)
     }
 }
 
+static char *ssh_bdrv_dirname(BlockDriverState *bs, Error **errp)
+{
+    if (qdict_haskey(bs->full_open_options, "host_key_check")) {
+        /* We cannot generate a simple prefix if we would have to
+         * append a query string */
+        error_setg(errp,
+                   "Cannot generate a base directory with host_key_check set");
+        return NULL;
+    }
+
+    if (bs->exact_filename[0] == '\0') {
+        error_setg(errp, "Cannot generate a base directory for this ssh node");
+        return NULL;
+    }
+
+    return path_combine(bs->exact_filename, "");
+}
+
 static const char *const ssh_sgfnt_runtime_opts[] = {
     "host",
     "port",
@@ -1219,6 +1237,7 @@ static BlockDriver bdrv_ssh = {
     .bdrv_getlength               = ssh_getlength,
     .bdrv_co_flush_to_disk        = ssh_co_flush,
     .bdrv_refresh_filename        = ssh_refresh_filename,
+    .bdrv_dirname                 = ssh_bdrv_dirname,
     .create_opts                  = &ssh_create_opts,
     .sgfnt_runtime_opts           = ssh_sgfnt_runtime_opts,
 };
