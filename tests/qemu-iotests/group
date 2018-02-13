@@ -135,7 +135,7 @@
 126 rw auto backing
 127 rw auto backing quick
 128 rw auto quick
-129 rw auto quick
+# 129 rw auto quick
 130 rw auto quick
 131 rw auto quick
 132 rw auto quick
@@ -153,7 +153,7 @@
 144 rw auto quick
 145 auto quick
 146 auto quick
-147 auto
+# 147 auto
 148 rw auto quick
 149 rw auto sudo
 150 rw auto quick
