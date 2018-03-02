@@ -1578,20 +1578,23 @@ static int convert_iteration_sectors(ImgConvertState *s, int64_t sector_num)
     n = MIN(s->total_sectors - sector_num, BDRV_REQUEST_MAX_SECTORS);
 
     if (s->sector_next_status <= sector_num) {
+        BlockDriverState *bs = blk_bs(s->src[src_cur]);
+        BlockDriverState *base = s->target_has_backing ? backing_bs(bs) : NULL;
         int64_t count = n * BDRV_SECTOR_SIZE;
+        int64_t offset = (sector_num - src_cur_offset) * BDRV_SECTOR_SIZE;
 
-        if (s->target_has_backing) {
-
-            ret = bdrv_block_status(blk_bs(s->src[src_cur]),
-                                    (sector_num - src_cur_offset) *
-                                    BDRV_SECTOR_SIZE,
-                                    count, &count, NULL, NULL);
-        } else {
-            ret = bdrv_block_status_above(blk_bs(s->src[src_cur]), NULL,
-                                          (sector_num - src_cur_offset) *
-                                          BDRV_SECTOR_SIZE,
-                                          count, &count, NULL, NULL);
-        }
+        /* We do not need fully correct allocation information.  If we
+         * have a metadata layer like qcow2, it should know reasonably
+         * well which areas are allocated (and if we do not, this will
+         * fall back to the protocol level).
+         * If there are unallocated areas on the protocol level that
+         * the metadata layer reported as allocated, the worst that
+         * can happen is a performance hit.  On the other hand, the
+         * worst that can happen if we always fall through to the
+         * protocol level is a performance hit, too, because we do not
+         * know how fast bdrv_block_status() is once it leaves the
+         * qemu block layer. */
+        ret = bdrv_greedy_block_status_above(bs, base, offset, count, &count);
         if (ret < 0) {
             return ret;
         }
