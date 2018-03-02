@@ -1853,6 +1853,7 @@ typedef struct BdrvCoBlockStatusData {
     BlockDriverState *bs;
     BlockDriverState *base;
     bool want_zero;
+    bool top_allocation;
     int64_t offset;
     int64_t bytes;
     int64_t *pnum;
@@ -1902,6 +1903,12 @@ int coroutine_fn bdrv_co_block_status_from_backing(BlockDriverState *bs,
  * _ZERO where possible; otherwise, the result favors larger 'pnum',
  * with a focus on accurate BDRV_BLOCK_ALLOCATED.
  *
+ * If 'top_allocation' is true, this function will not automatically
+ * descend to *file to investigate further if the current layer
+ * reports the area as allocated data.  Since this flag only disables
+ * a code path that is enabled by 'want_zero', it can only be used
+ * together with 'want_zero'.
+ *
  * If 'offset' is beyond the end of the disk image the return value is
  * BDRV_BLOCK_EOF and 'pnum' is set to 0.
  *
@@ -1921,6 +1928,7 @@ int coroutine_fn bdrv_co_block_status_from_backing(BlockDriverState *bs,
  */
 static int coroutine_fn bdrv_co_block_status(BlockDriverState *bs,
                                              bool want_zero,
+                                             bool top_allocation,
                                              int64_t offset, int64_t bytes,
                                              int64_t *pnum, int64_t *map,
                                              BlockDriverState **file)
@@ -1932,6 +1940,8 @@ static int coroutine_fn bdrv_co_block_status(BlockDriverState *bs,
     BlockDriverState *local_file = NULL;
     int64_t aligned_offset, aligned_bytes;
     uint32_t align;
+
+    assert(!(top_allocation && !want_zero));
 
     assert(pnum);
     *pnum = 0;
@@ -2002,7 +2012,7 @@ static int coroutine_fn bdrv_co_block_status(BlockDriverState *bs,
 
     if (ret & BDRV_BLOCK_RAW) {
         assert(ret & BDRV_BLOCK_OFFSET_VALID && local_file);
-        ret = bdrv_co_block_status(local_file, want_zero, local_map,
+        ret = bdrv_co_block_status(local_file, want_zero, false, local_map,
                                    *pnum, pnum, &local_map, &local_file);
         goto out;
     }
@@ -2022,13 +2032,21 @@ static int coroutine_fn bdrv_co_block_status(BlockDriverState *bs,
         }
     }
 
-    if (want_zero && local_file && local_file != bs &&
+    /* Gather additional information from local_file, but only if:
+     * (1) want_zero encourages us to investigate further,
+     * (2) top_allocation does not discourage us again,
+     * (3) local_file is something useful at all,
+     * (4) the current layer reports data and we know where it is at
+     *     the level below, so we can find out what that lower level
+     *     thinks about that data.
+     */
+    if (want_zero && !top_allocation && local_file && local_file != bs &&
         (ret & BDRV_BLOCK_DATA) && !(ret & BDRV_BLOCK_ZERO) &&
         (ret & BDRV_BLOCK_OFFSET_VALID)) {
         int64_t file_pnum;
         int ret2;
 
-        ret2 = bdrv_co_block_status(local_file, want_zero, local_map,
+        ret2 = bdrv_co_block_status(local_file, want_zero, false, local_map,
                                     *pnum, &file_pnum, NULL, NULL);
         if (ret2 >= 0) {
             /* Ignore errors.  This is just providing extra information, it
@@ -2065,9 +2083,42 @@ early_out:
     return ret;
 }
 
+/*
+ * This function will always query the top layer (regarding a BDS's
+ * "metadata" chain, i.e. through 'file' links).  Depending on the
+ * values of @top_allocation and @want_zero, it may go further:
+ * - If @want_zero is true, it will always go down to the protocol
+ *   layer to retrieve accurate mapping information.
+ * - If @top_allocation is true, it will go down the chain until a
+ *   node is found that provides some allocation information.
+ * @top_allocation can only be used if @want_zero is true as well.
+ *
+ * The difference in behavior can be shown in the following three
+ * examples:
+ * (1) A raw file contains a hole on the filesystem (protocol) level.
+ * (2) A qcow2 image reports an area as allocated data, but on the
+ *     filesystem, that area is actually a hole.
+ * (3) A qcow2 image reports an area as unallocated/zero.
+ *
+ * Case (1);
+ * - With @want_zero or both @top_allocation and @want_zero:
+ *   The area is reported as unallocated (and zero).
+ * - Otherwise:
+ *   The area is reported as allocated data.
+ *
+ * Case (2):
+ * - With @want_zero:
+ *   The area is reported as unallocated (and zero).
+ * - Otherwise:
+ *   The area is reported as allocated data.
+ *
+ * Case (3):
+ * - The area is always reported as unallocated (and zero).
+ */
 static int coroutine_fn bdrv_co_block_status_above(BlockDriverState *bs,
                                                    BlockDriverState *base,
                                                    bool want_zero,
+                                                   bool top_allocation,
                                                    int64_t offset,
                                                    int64_t bytes,
                                                    int64_t *pnum,
@@ -2080,8 +2131,8 @@ static int coroutine_fn bdrv_co_block_status_above(BlockDriverState *bs,
 
     assert(bs != base);
     for (p = bs; p != base; p = backing_bs(p)) {
-        ret = bdrv_co_block_status(p, want_zero, offset, bytes, pnum, map,
-                                   file);
+        ret = bdrv_co_block_status(p, want_zero, top_allocation,
+                                   offset, bytes, pnum, map, file);
         if (ret < 0) {
             break;
         }
@@ -2112,6 +2163,7 @@ static void coroutine_fn bdrv_block_status_above_co_entry(void *opaque)
 
     data->ret = bdrv_co_block_status_above(data->bs, data->base,
                                            data->want_zero,
+                                           data->top_allocation,
                                            data->offset, data->bytes,
                                            data->pnum, data->map, data->file);
     data->done = true;
@@ -2124,9 +2176,9 @@ static void coroutine_fn bdrv_block_status_above_co_entry(void *opaque)
  */
 static int bdrv_common_block_status_above(BlockDriverState *bs,
                                           BlockDriverState *base,
-                                          bool want_zero, int64_t offset,
-                                          int64_t bytes, int64_t *pnum,
-                                          int64_t *map,
+                                          bool want_zero, bool top_allocation,
+                                          int64_t offset, int64_t bytes,
+                                          int64_t *pnum, int64_t *map,
                                           BlockDriverState **file)
 {
     Coroutine *co;
@@ -2134,6 +2186,7 @@ static int bdrv_common_block_status_above(BlockDriverState *bs,
         .bs = bs,
         .base = base,
         .want_zero = want_zero,
+        .top_allocation = top_allocation,
         .offset = offset,
         .bytes = bytes,
         .pnum = pnum,
@@ -2157,7 +2210,7 @@ int bdrv_block_status_above(BlockDriverState *bs, BlockDriverState *base,
                             int64_t offset, int64_t bytes, int64_t *pnum,
                             int64_t *map, BlockDriverState **file)
 {
-    return bdrv_common_block_status_above(bs, base, true, offset, bytes,
+    return bdrv_common_block_status_above(bs, base, true, false, offset, bytes,
                                           pnum, map, file);
 }
 
@@ -2174,9 +2227,9 @@ int coroutine_fn bdrv_is_allocated(BlockDriverState *bs, int64_t offset,
     int ret;
     int64_t dummy;
 
-    ret = bdrv_common_block_status_above(bs, backing_bs(bs), false, offset,
-                                         bytes, pnum ? pnum : &dummy, NULL,
-                                         NULL);
+    ret = bdrv_common_block_status_above(bs, backing_bs(bs), false, false,
+                                         offset, bytes, pnum ? pnum : &dummy,
+                                         NULL, NULL);
     if (ret < 0) {
         return ret;
     }
