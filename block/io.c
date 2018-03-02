@@ -2221,6 +2221,20 @@ int bdrv_block_status(BlockDriverState *bs, int64_t offset, int64_t bytes,
                                    offset, bytes, pnum, map, file);
 }
 
+/*
+ * Same as bdrv_block_status_above(), but returns the first allocation
+ * information that can be found in the relevant metadata chain.
+ * See the documentation of @top_allocation for
+ * bdrv_co_block_status_above() for details.
+ */
+int bdrv_greedy_block_status_above(BlockDriverState *bs,
+                                   BlockDriverState *base,
+                                   int64_t offset, int64_t bytes, int64_t *pnum)
+{
+    return bdrv_common_block_status_above(bs, base, true, true, offset, bytes,
+                                          pnum, NULL, NULL);
+}
+
 int coroutine_fn bdrv_is_allocated(BlockDriverState *bs, int64_t offset,
                                    int64_t bytes, int64_t *pnum)
 {
