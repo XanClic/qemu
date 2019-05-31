@@ -5086,6 +5086,13 @@ void qcow2_signal_corruption(BlockDriverState *bs, bool fatal, int64_t offset,
     s->signaled_corruption = true;
 }
 
+static BdrvChild *qcow2_storage_child(BlockDriverState *bs)
+{
+    BDRVQcow2State *s = bs->opaque;
+
+    return s->data_file;
+}
+
 static QemuOptsList qcow2_create_opts = {
     .name = "qcow2-create-opts",
     .head = QTAILQ_HEAD_INITIALIZER(qcow2_create_opts.head),
@@ -5232,6 +5239,8 @@ BlockDriver bdrv_qcow2 = {
     .bdrv_reopen_bitmaps_rw = qcow2_reopen_bitmaps_rw,
     .bdrv_can_store_new_dirty_bitmap = qcow2_can_store_new_dirty_bitmap,
     .bdrv_remove_persistent_dirty_bitmap = qcow2_remove_persistent_dirty_bitmap,
+
+    .bdrv_storage_child = qcow2_storage_child,
 };
 
 static void bdrv_qcow2_init(void)
