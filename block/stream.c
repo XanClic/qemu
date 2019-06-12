@@ -63,6 +63,7 @@ static int stream_prepare(Job *job)
     StreamBlockJob *s = container_of(job, StreamBlockJob, common.job);
     BlockJob *bjob = &s->common;
     BlockDriverState *bs = blk_bs(bjob->blk);
+    BlockDriverState *unfiltered_bs = bdrv_skip_rw_filters(bs);
     BlockDriverState *base = s->base;
     Error *local_err = NULL;
     int ret = 0;
@@ -70,7 +71,7 @@ static int stream_prepare(Job *job)
     bdrv_unfreeze_backing_chain(bs, base);
     s->chain_frozen = false;
 
-    if (bs->backing) {
+    if (bdrv_filtered_cow_child(unfiltered_bs)) {
         const char *base_id = NULL, *base_fmt = NULL;
         if (base) {
             base_id = s->backing_file_str;
@@ -78,8 +79,8 @@ static int stream_prepare(Job *job)
                 base_fmt = base->drv->format_name;
             }
         }
-        ret = bdrv_change_backing_file(bs, base_id, base_fmt);
-        bdrv_set_backing_hd(bs, base, &local_err);
+        ret = bdrv_change_backing_file(unfiltered_bs, base_id, base_fmt);
+        bdrv_set_backing_hd(unfiltered_bs, base, &local_err);
         if (local_err) {
             error_report_err(local_err);
             return -EPERM;
@@ -110,7 +111,9 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
     StreamBlockJob *s = container_of(job, StreamBlockJob, common.job);
     BlockBackend *blk = s->common.blk;
     BlockDriverState *bs = blk_bs(blk);
+    BlockDriverState *unfiltered_bs = bdrv_skip_rw_filters(bs);
     BlockDriverState *base = s->base;
+    BlockDriverState *filtered_base;
     int64_t len;
     int64_t offset = 0;
     uint64_t delay_ns = 0;
@@ -119,9 +122,11 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
     int64_t n = 0; /* bytes */
     void *buf;
 
-    if (!bs->backing) {
+    if (!bdrv_filtered_cow_child(unfiltered_bs)) {
         goto out;
     }
+
+    filtered_base = bdrv_filtered_cow_bs(bdrv_find_overlay(bs, base));
 
     len = bdrv_getlength(bs);
     if (len < 0) {
@@ -154,14 +159,14 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
 
         copy = false;
 
-        ret = bdrv_is_allocated(bs, offset, STREAM_BUFFER_SIZE, &n);
+        ret = bdrv_is_allocated(unfiltered_bs, offset, STREAM_BUFFER_SIZE, &n);
         if (ret == 1) {
             /* Allocated in the top, no need to copy.  */
         } else if (ret >= 0) {
             /* Copy if allocated in the intermediate images.  Limit to the
              * known-unallocated area [offset, offset+n*BDRV_SECTOR_SIZE).  */
-            ret = bdrv_is_allocated_above(backing_bs(bs), base,
-                                          offset, n, &n);
+            ret = bdrv_is_allocated_above(bdrv_filtered_cow_bs(unfiltered_bs),
+                                          filtered_base, offset, n, &n);
 
             /* Finish early if end of backing file has been reached */
             if (ret == 0 && n == 0) {
@@ -266,7 +271,9 @@ void stream_start(const char *job_id, BlockDriverState *bs,
      * disappear from the chain after this operation. The streaming job reads
      * every block only once, assuming that it doesn't change, so block writes
      * and resizes. */
-    for (iter = backing_bs(bs); iter && iter != base; iter = backing_bs(iter)) {
+    for (iter = bdrv_filtered_bs(bs); iter && iter != base;
+         iter = bdrv_filtered_bs(iter))
+    {
         block_job_add_bdrv(&s->common, "intermediate node", iter, 0,
                            BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED,
                            &error_abort);
