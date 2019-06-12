@@ -992,7 +992,7 @@ static int img_commit(int argc, char **argv)
     if (!blk) {
         return 1;
     }
-    bs = blk_bs(blk);
+    bs = bdrv_skip_implicit_filters(blk_bs(blk));
 
     qemu_progress_init(progress, 1.f);
     qemu_progress_print(0.f, 100);
@@ -1009,7 +1009,7 @@ static int img_commit(int argc, char **argv)
         /* This is different from QMP, which by default uses the deepest file in
          * the backing chain (i.e., the very base); however, the traditional
          * behavior of qemu-img commit is using the immediate backing file. */
-        base_bs = backing_bs(bs);
+        base_bs = bdrv_filtered_cow_bs(bs);
         if (!base_bs) {
             error_setg(&local_err, "Image does not have a backing file");
             goto done;
@@ -1626,19 +1626,18 @@ static int convert_iteration_sectors(ImgConvertState *s, int64_t sector_num)
 
     if (s->sector_next_status <= sector_num) {
         int64_t count = n * BDRV_SECTOR_SIZE;
+        BlockDriverState *src_bs = blk_bs(s->src[src_cur]);
+        BlockDriverState *base;
 
         if (s->target_has_backing) {
-
-            ret = bdrv_block_status(blk_bs(s->src[src_cur]),
-                                    (sector_num - src_cur_offset) *
-                                    BDRV_SECTOR_SIZE,
-                                    count, &count, NULL, NULL);
+            base = bdrv_backing_chain_next(src_bs);
         } else {
-            ret = bdrv_block_status_above(blk_bs(s->src[src_cur]), NULL,
-                                          (sector_num - src_cur_offset) *
-                                          BDRV_SECTOR_SIZE,
-                                          count, &count, NULL, NULL);
+            base = NULL;
         }
+        ret = bdrv_block_status_above(src_bs, base,
+                                      (sector_num - src_cur_offset) *
+                                      BDRV_SECTOR_SIZE,
+                                      count, &count, NULL, NULL);
         if (ret < 0) {
             error_report("error while reading block status of sector %" PRId64
                          ": %s", sector_num, strerror(-ret));
@@ -2439,7 +2438,8 @@ static int img_convert(int argc, char **argv)
          * s.target_backing_sectors has to be negative, which it will
          * be automatically).  The backing file length is used only
          * for optimizations, so such a case is not fatal. */
-        s.target_backing_sectors = bdrv_nb_sectors(out_bs->backing->bs);
+        s.target_backing_sectors =
+            bdrv_nb_sectors(bdrv_filtered_cow_bs(out_bs));
     } else {
         s.target_backing_sectors = -1;
     }
@@ -2802,6 +2802,7 @@ static int get_block_status(BlockDriverState *bs, int64_t offset,
 
     depth = 0;
     for (;;) {
+        bs = bdrv_skip_rw_filters(bs);
         ret = bdrv_block_status(bs, offset, bytes, &bytes, &map, &file);
         if (ret < 0) {
             return ret;
@@ -2810,7 +2811,7 @@ static int get_block_status(BlockDriverState *bs, int64_t offset,
         if (ret & (BDRV_BLOCK_ZERO|BDRV_BLOCK_DATA)) {
             break;
         }
-        bs = backing_bs(bs);
+        bs = bdrv_filtered_cow_bs(bs);
         if (bs == NULL) {
             ret = 0;
             break;
@@ -2949,7 +2950,7 @@ static int img_map(int argc, char **argv)
     if (!blk) {
         return 1;
     }
-    bs = blk_bs(blk);
+    bs = bdrv_skip_implicit_filters(blk_bs(blk));
 
     if (output_format == OFORMAT_HUMAN) {
         printf("%-16s%-16s%-16s%s\n", "Offset", "Length", "Mapped to", "File");
@@ -3165,6 +3166,7 @@ static int img_rebase(int argc, char **argv)
     uint8_t *buf_old = NULL;
     uint8_t *buf_new = NULL;
     BlockDriverState *bs = NULL, *prefix_chain_bs = NULL;
+    BlockDriverState *unfiltered_bs;
     char *filename;
     const char *fmt, *cache, *src_cache, *out_basefmt, *out_baseimg;
     int c, flags, src_flags, ret;
@@ -3299,6 +3301,8 @@ static int img_rebase(int argc, char **argv)
     }
     bs = blk_bs(blk);
 
+    unfiltered_bs = bdrv_skip_rw_filters(bs);
+
     if (out_basefmt != NULL) {
         if (bdrv_find_format(out_basefmt) == NULL) {
             error_report("Invalid format name: '%s'", out_basefmt);
@@ -3310,7 +3314,7 @@ static int img_rebase(int argc, char **argv)
     /* For safe rebasing we need to compare old and new backing file */
     if (!unsafe) {
         QDict *options = NULL;
-        BlockDriverState *base_bs = backing_bs(bs);
+        BlockDriverState *base_bs = bdrv_filtered_cow_bs(unfiltered_bs);
 
         if (base_bs) {
             blk_old_backing = blk_new(qemu_get_aio_context(),
@@ -3463,7 +3467,7 @@ static int img_rebase(int argc, char **argv)
                  * If cluster wasn't changed since prefix_chain, we don't need
                  * to take action
                  */
-                ret = bdrv_is_allocated_above(backing_bs(bs), prefix_chain_bs,
+                ret = bdrv_is_allocated_above(unfiltered_bs, prefix_chain_bs,
                                               offset, n, &n);
                 if (ret < 0) {
                     error_report("error while reading image metadata: %s",
