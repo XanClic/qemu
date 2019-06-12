@@ -633,7 +633,7 @@ static int mirror_exit_common(Job *job)
     s->prepared = true;
 
     if (bdrv_chain_contains(src, target_bs)) {
-        bdrv_unfreeze_backing_chain(mirror_top_bs, target_bs);
+        bdrv_unfreeze_chain(mirror_top_bs, target_bs);
     }
 
     bdrv_release_dirty_bitmap(src, s->dirty_bitmap);
@@ -1707,7 +1707,7 @@ static BlockJob *mirror_start_job(
             }
         }
 
-        if (bdrv_freeze_backing_chain(mirror_top_bs, target, errp) < 0) {
+        if (bdrv_freeze_chain(mirror_top_bs, target, errp) < 0) {
             goto fail;
         }
     }
