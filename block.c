@@ -2214,12 +2214,15 @@ static void bdrv_replace_child_noperm(BdrvChild *child,
  * If @new_bs is not NULL, bdrv_check_perm() must be called beforehand, as this
  * function uses bdrv_set_perm() to update the permissions according to the new
  * reference that @new_bs gets.
+ *
+ * Callers must ensure that child->frozen is false.
  */
 static void bdrv_replace_child(BdrvChild *child, BlockDriverState *new_bs)
 {
     BlockDriverState *old_bs = child->bs;
     uint64_t perm, shared_perm;
 
+    /* Asserts that child->frozen == false */
     bdrv_replace_child_noperm(child, new_bs);
 
     if (old_bs) {
@@ -2360,6 +2363,7 @@ static void bdrv_detach_child(BdrvChild *child)
     g_free(child);
 }
 
+/* Callers must ensure that child->frozen is false. */
 void bdrv_root_unref_child(BdrvChild *child)
 {
     BlockDriverState *child_bs;
@@ -2369,6 +2373,7 @@ void bdrv_root_unref_child(BdrvChild *child)
     bdrv_unref(child_bs);
 }
 
+/* Callers must ensure that child->frozen is false. */
 void bdrv_unref_child(BlockDriverState *parent, BdrvChild *child)
 {
     if (child == NULL) {
@@ -2435,6 +2440,7 @@ void bdrv_set_backing_hd(BlockDriverState *bs, BlockDriverState *backing_hd,
     }
 
     if (bs->backing) {
+        /* Cannot be frozen, we checked that above */
         bdrv_unref_child(bs, bs->backing);
     }
 
@@ -3908,6 +3914,7 @@ static void bdrv_close(BlockDriverState *bs)
 
     if (bs->drv) {
         if (bs->drv->bdrv_close) {
+            /* Must unfreeze all children, so bdrv_unref_child() works */
             bs->drv->bdrv_close(bs);
         }
         bs->drv = NULL;
@@ -4281,17 +4288,20 @@ BlockDriverState *bdrv_find_base(BlockDriverState *bs)
  * Return true if at least one of the backing links between @bs and
  * @base is frozen. @errp is set if that's the case.
  * @base must be reachable from @bs, or NULL.
+ * (Filters are treated as normal elements of the backing chain.)
  */
 bool bdrv_is_backing_chain_frozen(BlockDriverState *bs, BlockDriverState *base,
                                   Error **errp)
 {
     BlockDriverState *i;
+    BdrvChild *child;
 
-    for (i = bs; i != base; i = backing_bs(i)) {
-        if (i->backing && i->backing->frozen) {
+    for (i = bs; i != base; i = child_bs(child)) {
+        child = bdrv_filtered_child(i);
+
+        if (child && child->frozen) {
             error_setg(errp, "Cannot change '%s' link from '%s' to '%s'",
-                       i->backing->name, i->node_name,
-                       backing_bs(i)->node_name);
+                       child->name, i->node_name, child->bs->node_name);
             return true;
         }
     }
@@ -4305,19 +4315,22 @@ bool bdrv_is_backing_chain_frozen(BlockDriverState *bs, BlockDriverState *base,
  * none of the links are modified.
  * @base must be reachable from @bs, or NULL.
  * Returns 0 on success. On failure returns < 0 and sets @errp.
+ * (Filters are treated as normal elements of the backing chain.)
  */
 int bdrv_freeze_backing_chain(BlockDriverState *bs, BlockDriverState *base,
                               Error **errp)
 {
     BlockDriverState *i;
+    BdrvChild *child;
 
     if (bdrv_is_backing_chain_frozen(bs, base, errp)) {
         return -EPERM;
     }
 
-    for (i = bs; i != base; i = backing_bs(i)) {
-        if (i->backing) {
-            i->backing->frozen = true;
+    for (i = bs; i != base; i = child_bs(child)) {
+        child = bdrv_filtered_child(i);
+        if (child) {
+            child->frozen = true;
         }
     }
 
@@ -4328,15 +4341,18 @@ int bdrv_freeze_backing_chain(BlockDriverState *bs, BlockDriverState *base,
  * Unfreeze all backing links between @bs and @base. The caller must
  * ensure that all links are frozen before using this function.
  * @base must be reachable from @bs, or NULL.
+ * (Filters are treated as normal elements of the backing chain.)
  */
 void bdrv_unfreeze_backing_chain(BlockDriverState *bs, BlockDriverState *base)
 {
     BlockDriverState *i;
+    BdrvChild *child;
 
-    for (i = bs; i != base; i = backing_bs(i)) {
-        if (i->backing) {
-            assert(i->backing->frozen);
-            i->backing->frozen = false;
+    for (i = bs; i != base; i = child_bs(child)) {
+        child = bdrv_filtered_child(i);
+        if (child) {
+            assert(child->frozen);
+            child->frozen = false;
         }
     }
 }
@@ -4438,8 +4454,11 @@ int bdrv_drop_intermediate(BlockDriverState *top, BlockDriverState *base,
             }
         }
 
-        /* Do the actual switch in the in-memory graph.
-         * Completes bdrv_check_update_perm() transaction internally. */
+        /*
+         * Do the actual switch in the in-memory graph.
+         * Completes bdrv_check_update_perm() transaction internally.
+         * c->frozen is false, we have checked that above.
+         */
         bdrv_ref(base);
         bdrv_replace_child(c, base);
         bdrv_unref(top);
