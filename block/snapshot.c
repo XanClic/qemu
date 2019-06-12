@@ -154,8 +154,9 @@ int bdrv_can_snapshot(BlockDriverState *bs)
     }
 
     if (!drv->bdrv_snapshot_create) {
-        if (bs->file != NULL) {
-            return bdrv_can_snapshot(bs->file->bs);
+        BlockDriverState *storage_bs = bdrv_storage_bs(bs);
+        if (storage_bs) {
+            return bdrv_can_snapshot(storage_bs);
         }
         return 0;
     }
@@ -167,14 +168,15 @@ int bdrv_snapshot_create(BlockDriverState *bs,
                          QEMUSnapshotInfo *sn_info)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *storage_bs = bdrv_storage_bs(bs);
     if (!drv) {
         return -ENOMEDIUM;
     }
     if (drv->bdrv_snapshot_create) {
         return drv->bdrv_snapshot_create(bs, sn_info);
     }
-    if (bs->file) {
-        return bdrv_snapshot_create(bs->file->bs, sn_info);
+    if (storage_bs) {
+        return bdrv_snapshot_create(storage_bs, sn_info);
     }
     return -ENOTSUP;
 }
@@ -184,6 +186,7 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
                        Error **errp)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *storage_bs;
     int ret, open_ret;
 
     if (!drv) {
@@ -204,39 +207,66 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
         return ret;
     }
 
-    if (bs->file) {
-        BlockDriverState *file;
-        QDict *options = qdict_clone_shallow(bs->options);
+    storage_bs = bdrv_storage_bs(bs);
+    if (storage_bs) {
+        QDict *options;
         QDict *file_options;
         Error *local_err = NULL;
+        bool is_backing_child;
+        BdrvChild **child_pointer;
 
-        file = bs->file->bs;
+        /*
+         * Filters may reference the storage child through
+         * bs->backing.  We need to know whether we are dealing with
+         * bs->backing or bs->file, so we check it here.
+         */
+        if (storage_bs == bs->file->bs) {
+            is_backing_child = false;
+            child_pointer = &bs->file;
+        } else if (storage_bs == bs->backing->bs) {
+            is_backing_child = true;
+            child_pointer = &bs->backing;
+        } else {
+            /*
+             * The storage child is not referenced by a field in the
+             * BDS object.  We cannot go on then.
+             */
+            error_setg(errp, "Block driver does not support snapshots");
+            return -ENOTSUP;
+        }
+
+        options = qdict_clone_shallow(bs->options);
+
         /* Prevent it from getting deleted when detached from bs */
-        bdrv_ref(file);
+        bdrv_ref(storage_bs);
 
-        qdict_extract_subqdict(options, &file_options, "file.");
+        qdict_extract_subqdict(options, &file_options,
+                               is_backing_child ? "backing." : "file.");
         qobject_unref(file_options);
-        qdict_put_str(options, "file", bdrv_get_node_name(file));
+        qdict_put_str(options, is_backing_child ? "backing" : "file",
+                      bdrv_get_node_name(storage_bs));
 
         if (drv->bdrv_close) {
             drv->bdrv_close(bs);
         }
-        bdrv_unref_child(bs, bs->file);
-        bs->file = NULL;
 
-        ret = bdrv_snapshot_goto(file, snapshot_id, errp);
+        assert(storage_bs == (*child_pointer)->bs);
+        bdrv_unref_child(bs, *child_pointer);
+        *child_pointer = NULL;
+
+        ret = bdrv_snapshot_goto(storage_bs, snapshot_id, errp);
         open_ret = drv->bdrv_open(bs, options, bs->open_flags, &local_err);
         qobject_unref(options);
         if (open_ret < 0) {
-            bdrv_unref(file);
+            bdrv_unref(storage_bs);
             bs->drv = NULL;
             /* A bdrv_snapshot_goto() error takes precedence */
             error_propagate(errp, local_err);
             return ret < 0 ? ret : open_ret;
         }
 
-        assert(bs->file->bs == file);
-        bdrv_unref(file);
+        assert(storage_bs == (*child_pointer)->bs);
+        bdrv_unref(storage_bs);
         return ret;
     }
 
@@ -272,6 +302,7 @@ int bdrv_snapshot_delete(BlockDriverState *bs,
                          Error **errp)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *storage_bs = bdrv_storage_bs(bs);
     int ret;
 
     if (!drv) {
@@ -288,8 +319,8 @@ int bdrv_snapshot_delete(BlockDriverState *bs,
 
     if (drv->bdrv_snapshot_delete) {
         ret = drv->bdrv_snapshot_delete(bs, snapshot_id, name, errp);
-    } else if (bs->file) {
-        ret = bdrv_snapshot_delete(bs->file->bs, snapshot_id, name, errp);
+    } else if (storage_bs) {
+        ret = bdrv_snapshot_delete(storage_bs, snapshot_id, name, errp);
     } else {
         error_setg(errp, "Block format '%s' used by device '%s' "
                    "does not support internal snapshot deletion",
@@ -305,14 +336,15 @@ int bdrv_snapshot_list(BlockDriverState *bs,
                        QEMUSnapshotInfo **psn_info)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *storage_bs = bdrv_storage_bs(bs);
     if (!drv) {
         return -ENOMEDIUM;
     }
     if (drv->bdrv_snapshot_list) {
         return drv->bdrv_snapshot_list(bs, psn_info);
     }
-    if (bs->file) {
-        return bdrv_snapshot_list(bs->file->bs, psn_info);
+    if (storage_bs) {
+        return bdrv_snapshot_list(storage_bs, psn_info);
     }
     return -ENOTSUP;
 }
