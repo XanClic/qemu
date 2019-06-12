@@ -146,6 +146,32 @@ bool bdrv_snapshot_find_by_id_and_name(BlockDriverState *bs,
     return ret;
 }
 
+/**
+ * Return the child BDS to which we can fall back if the given BDS
+ * does not support snapshots.
+ * Return NULL if there is no BDS to (safely) fall back to.
+ */
+static BlockDriverState *bdrv_snapshot_fallback(BlockDriverState *bs)
+{
+    BlockDriverState *child_bs = NULL;
+    BdrvChild *child;
+
+    QLIST_FOREACH(child, &bs->children, next) {
+        if (child == bdrv_filtered_cow_child(bs)) {
+            /* Ignore: COW children need not be included in snapshots */
+            continue;
+        }
+
+        if (child_bs) {
+            /* Cannot fall back to a single child if there are multiple */
+            return NULL;
+        }
+        child_bs = child->bs;
+    }
+
+    return child_bs;
+}
+
 int bdrv_can_snapshot(BlockDriverState *bs)
 {
     BlockDriver *drv = bs->drv;
@@ -154,8 +180,9 @@ int bdrv_can_snapshot(BlockDriverState *bs)
     }
 
     if (!drv->bdrv_snapshot_create) {
-        if (bs->file != NULL) {
-            return bdrv_can_snapshot(bs->file->bs);
+        BlockDriverState *fallback_bs = bdrv_snapshot_fallback(bs);
+        if (fallback_bs) {
+            return bdrv_can_snapshot(fallback_bs);
         }
         return 0;
     }
@@ -167,14 +194,15 @@ int bdrv_snapshot_create(BlockDriverState *bs,
                          QEMUSnapshotInfo *sn_info)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *fallback_bs = bdrv_snapshot_fallback(bs);
     if (!drv) {
         return -ENOMEDIUM;
     }
     if (drv->bdrv_snapshot_create) {
         return drv->bdrv_snapshot_create(bs, sn_info);
     }
-    if (bs->file) {
-        return bdrv_snapshot_create(bs->file->bs, sn_info);
+    if (fallback_bs) {
+        return bdrv_snapshot_create(fallback_bs, sn_info);
     }
     return -ENOTSUP;
 }
@@ -184,6 +212,7 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
                        Error **errp)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *fallback_bs;
     int ret, open_ret;
 
     if (!drv) {
@@ -204,39 +233,66 @@ int bdrv_snapshot_goto(BlockDriverState *bs,
         return ret;
     }
 
-    if (bs->file) {
-        BlockDriverState *file;
-        QDict *options = qdict_clone_shallow(bs->options);
+    fallback_bs = bdrv_snapshot_fallback(bs);
+    if (fallback_bs) {
+        QDict *options;
         QDict *file_options;
         Error *local_err = NULL;
+        bool is_backing_child;
+        BdrvChild **child_pointer;
 
-        file = bs->file->bs;
+        /*
+         * We need a pointer to the fallback child pointer, so let us
+         * see whether the child is referenced by a field in the BDS
+         * object.
+         */
+        if (fallback_bs == bs->file->bs) {
+            is_backing_child = false;
+            child_pointer = &bs->file;
+        } else if (fallback_bs == bs->backing->bs) {
+            is_backing_child = true;
+            child_pointer = &bs->backing;
+        } else {
+            /*
+             * The fallback child is not referenced by a field in the
+             * BDS object.  We cannot go on then.
+             */
+            error_setg(errp, "Block driver does not support snapshots");
+            return -ENOTSUP;
+        }
+
+        options = qdict_clone_shallow(bs->options);
+
         /* Prevent it from getting deleted when detached from bs */
-        bdrv_ref(file);
+        bdrv_ref(fallback_bs);
 
-        qdict_extract_subqdict(options, &file_options, "file.");
+        qdict_extract_subqdict(options, &file_options,
+                               is_backing_child ? "backing." : "file.");
         qobject_unref(file_options);
-        qdict_put_str(options, "file", bdrv_get_node_name(file));
+        qdict_put_str(options, is_backing_child ? "backing" : "file",
+                      bdrv_get_node_name(fallback_bs));
 
         if (drv->bdrv_close) {
             drv->bdrv_close(bs);
         }
-        bdrv_unref_child(bs, bs->file);
-        bs->file = NULL;
 
-        ret = bdrv_snapshot_goto(file, snapshot_id, errp);
+        assert(fallback_bs == (*child_pointer)->bs);
+        bdrv_unref_child(bs, *child_pointer);
+        *child_pointer = NULL;
+
+        ret = bdrv_snapshot_goto(fallback_bs, snapshot_id, errp);
         open_ret = drv->bdrv_open(bs, options, bs->open_flags, &local_err);
         qobject_unref(options);
         if (open_ret < 0) {
-            bdrv_unref(file);
+            bdrv_unref(fallback_bs);
             bs->drv = NULL;
             /* A bdrv_snapshot_goto() error takes precedence */
             error_propagate(errp, local_err);
             return ret < 0 ? ret : open_ret;
         }
 
-        assert(bs->file->bs == file);
-        bdrv_unref(file);
+        assert(fallback_bs == (*child_pointer)->bs);
+        bdrv_unref(fallback_bs);
         return ret;
     }
 
@@ -272,6 +328,7 @@ int bdrv_snapshot_delete(BlockDriverState *bs,
                          Error **errp)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *fallback_bs = bdrv_snapshot_fallback(bs);
     int ret;
 
     if (!drv) {
@@ -288,8 +345,8 @@ int bdrv_snapshot_delete(BlockDriverState *bs,
 
     if (drv->bdrv_snapshot_delete) {
         ret = drv->bdrv_snapshot_delete(bs, snapshot_id, name, errp);
-    } else if (bs->file) {
-        ret = bdrv_snapshot_delete(bs->file->bs, snapshot_id, name, errp);
+    } else if (fallback_bs) {
+        ret = bdrv_snapshot_delete(fallback_bs, snapshot_id, name, errp);
     } else {
         error_setg(errp, "Block format '%s' used by device '%s' "
                    "does not support internal snapshot deletion",
@@ -305,14 +362,15 @@ int bdrv_snapshot_list(BlockDriverState *bs,
                        QEMUSnapshotInfo **psn_info)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *fallback_bs = bdrv_snapshot_fallback(bs);
     if (!drv) {
         return -ENOMEDIUM;
     }
     if (drv->bdrv_snapshot_list) {
         return drv->bdrv_snapshot_list(bs, psn_info);
     }
-    if (bs->file) {
-        return bdrv_snapshot_list(bs->file->bs, psn_info);
+    if (fallback_bs) {
+        return bdrv_snapshot_list(fallback_bs, psn_info);
     }
     return -ENOTSUP;
 }
