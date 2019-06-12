@@ -1095,7 +1095,7 @@ void hmp_commit(Monitor *mon, const QDict *qdict)
             return;
         }
 
-        bs = blk_bs(blk);
+        bs = bdrv_skip_implicit_filters(blk_bs(blk));
         aio_context = bdrv_get_aio_context(bs);
         aio_context_acquire(aio_context);
 
@@ -3392,7 +3392,9 @@ void qmp_block_commit(bool has_job_id, const char *job_id, const char *device,
 
     assert(bdrv_get_aio_context(base_bs) == aio_context);
 
-    for (iter = top_bs; iter != backing_bs(base_bs); iter = backing_bs(iter)) {
+    for (iter = top_bs; iter != bdrv_filtered_bs(base_bs);
+         iter = bdrv_filtered_bs(iter))
+    {
         if (bdrv_op_is_blocked(iter, BLOCK_OP_TYPE_COMMIT_TARGET, errp)) {
             goto out;
         }
