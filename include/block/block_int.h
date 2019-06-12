@@ -1181,6 +1181,9 @@ void bdrv_root_unref_child(BdrvChild *child);
 int bdrv_child_try_set_perm(BdrvChild *c, uint64_t perm, uint64_t shared,
                             Error **errp);
 
+void bdrv_get_cumulative_perm(BlockDriverState *bs,
+                              uint64_t *perm, uint64_t *shared_perm);
+
 /* Default implementation for BlockDriver.bdrv_child_perm() that can be used by
  * block filters: Forward CONSISTENT_READ, WRITE, WRITE_UNCHANGED and RESIZE to
  * all children */
