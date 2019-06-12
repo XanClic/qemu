@@ -152,6 +152,15 @@ static int coroutine_fn throttle_co_pdiscard(BlockDriverState *bs,
     return bdrv_co_pdiscard(bs->file, offset, bytes);
 }
 
+static int coroutine_fn throttle_co_pwritev_compressed(BlockDriverState *bs,
+                                                       uint64_t offset,
+                                                       uint64_t bytes,
+                                                       QEMUIOVector *qiov)
+{
+    return throttle_co_pwritev(bs, offset, bytes, qiov,
+                               BDRV_REQ_WRITE_COMPRESSED);
+}
+
 static int throttle_co_flush(BlockDriverState *bs)
 {
     return bdrv_co_flush(bs->file->bs);
@@ -250,6 +259,7 @@ static BlockDriver bdrv_throttle = {
 
     .bdrv_co_pwrite_zeroes              =   throttle_co_pwrite_zeroes,
     .bdrv_co_pdiscard                   =   throttle_co_pdiscard,
+    .bdrv_co_pwritev_compressed         =   throttle_co_pwritev_compressed,
 
     .bdrv_recurse_is_first_non_filter   =   throttle_recurse_is_first_non_filter,
 
