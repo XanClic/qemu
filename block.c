@@ -4511,15 +4511,37 @@ exit:
 int64_t bdrv_get_allocated_file_size(BlockDriverState *bs)
 {
     BlockDriver *drv = bs->drv;
+    BlockDriverState *storage_bs, *metadata_bs;
+
     if (!drv) {
         return -ENOMEDIUM;
     }
+
     if (drv->bdrv_get_allocated_file_size) {
         return drv->bdrv_get_allocated_file_size(bs);
     }
-    if (bs->file) {
-        return bdrv_get_allocated_file_size(bs->file->bs);
+
+    storage_bs = bdrv_storage_bs(bs);
+    metadata_bs = bdrv_metadata_bs(bs);
+
+    if (storage_bs) {
+        int64_t data_size, metadata_size = 0;
+
+        data_size = bdrv_get_allocated_file_size(storage_bs);
+        if (data_size < 0) {
+            return data_size;
+        }
+
+        if (storage_bs != metadata_bs) {
+            metadata_size = bdrv_get_allocated_file_size(metadata_bs);
+            if (metadata_size < 0) {
+                return metadata_size;
+            }
+        }
+
+        return data_size + metadata_size;
     }
+
     return -ENOTSUP;
 }
 
