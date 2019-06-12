@@ -4574,10 +4574,14 @@ bool bdrv_is_sg(BlockDriverState *bs)
 
 bool bdrv_is_encrypted(BlockDriverState *bs)
 {
-    if (bs->backing && bs->backing->bs->encrypted) {
+    BlockDriverState *filtered = bdrv_filtered_bs(bs);
+    if (bs->encrypted) {
         return true;
     }
-    return bs->encrypted;
+    if (filtered && bdrv_is_encrypted(filtered)) {
+        return true;
+    }
+    return false;
 }
 
 const char *bdrv_get_format_name(BlockDriverState *bs)
