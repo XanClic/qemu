@@ -4696,6 +4696,28 @@ bool bdrv_is_sg(BlockDriverState *bs)
     return bs->sg;
 }
 
+/**
+ * Return whether the given node supports compressed writes.
+ */
+bool bdrv_supports_compressed_writes(BlockDriverState *bs)
+{
+    BlockDriverState *filtered = bdrv_filtered_rw_bs(bs);
+
+    if (!bs->drv || !bs->drv->bdrv_co_pwritev_compressed) {
+        return false;
+    }
+
+    if (filtered) {
+        /*
+         * Filters can only forward compressed writes, so we have to
+         * check the child.
+         */
+        return bdrv_supports_compressed_writes(filtered);
+    }
+
+    return true;
+}
+
 const char *bdrv_get_format_name(BlockDriverState *bs)
 {
     return bs->drv ? bs->drv->format_name : NULL;
