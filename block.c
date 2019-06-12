@@ -4650,9 +4650,27 @@ int64_t bdrv_get_allocated_file_size(BlockDriverState *bs)
     if (drv->bdrv_get_allocated_file_size) {
         return drv->bdrv_get_allocated_file_size(bs);
     }
-    if (bs->file) {
-        return bdrv_get_allocated_file_size(bs->file->bs);
+
+    if (!QLIST_EMPTY(&bs->children)) {
+        BdrvChild *child;
+        int64_t child_size, total_size = 0;
+
+        QLIST_FOREACH(child, &bs->children, next) {
+            if (child == bdrv_filtered_cow_child(bs)) {
+                /* Ignore COW backing files */
+                continue;
+            }
+
+            child_size = bdrv_get_allocated_file_size(child->bs);
+            if (child_size < 0) {
+                return child_size;
+            }
+            total_size += child_size;
+        }
+
+        return total_size;
     }
+
     return -ENOTSUP;
 }
 
