@@ -31,7 +31,8 @@ enum {
 
 typedef struct StreamBlockJob {
     BlockJob common;
-    BlockDriverState *bottom;
+    BlockDriverState *bottom_cow_node;
+    BlockDriverState *above_base;
     BlockdevOnError on_error;
     char *backing_file_str;
     bool bs_read_only;
@@ -54,7 +55,7 @@ static void stream_abort(Job *job)
 
     if (s->chain_frozen) {
         BlockJob *bjob = &s->common;
-        bdrv_unfreeze_chain(blk_bs(bjob->blk), s->bottom);
+        bdrv_unfreeze_chain(blk_bs(bjob->blk), s->above_base);
     }
 }
 
@@ -63,14 +64,15 @@ static int stream_prepare(Job *job)
     StreamBlockJob *s = container_of(job, StreamBlockJob, common.job);
     BlockJob *bjob = &s->common;
     BlockDriverState *bs = blk_bs(bjob->blk);
-    BlockDriverState *base = backing_bs(s->bottom);
+    BlockDriverState *unfiltered_bs = bdrv_skip_rw_filters(bs);
+    BlockDriverState *base = bdrv_filtered_bs(s->above_base);
     Error *local_err = NULL;
     int ret = 0;
 
-    bdrv_unfreeze_chain(bs, s->bottom);
+    bdrv_unfreeze_chain(bs, s->above_base);
     s->chain_frozen = false;
 
-    if (bs->backing) {
+    if (bdrv_filtered_cow_child(unfiltered_bs)) {
         const char *base_id = NULL, *base_fmt = NULL;
         if (base) {
             base_id = s->backing_file_str;
@@ -78,8 +80,8 @@ static int stream_prepare(Job *job)
                 base_fmt = base->drv->format_name;
             }
         }
-        bdrv_set_backing_hd(bs, base, &local_err);
-        ret = bdrv_change_backing_file(bs, base_id, base_fmt);
+        bdrv_set_backing_hd(unfiltered_bs, base, &local_err);
+        ret = bdrv_change_backing_file(unfiltered_bs, base_id, base_fmt);
         if (local_err) {
             error_report_err(local_err);
             return -EPERM;
@@ -110,7 +112,8 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
     StreamBlockJob *s = container_of(job, StreamBlockJob, common.job);
     BlockBackend *blk = s->common.blk;
     BlockDriverState *bs = blk_bs(blk);
-    bool enable_cor = !backing_bs(s->bottom);
+    BlockDriverState *unfiltered_bs = bdrv_skip_rw_filters(bs);
+    bool enable_cor = !bdrv_filtered_bs(s->above_base);
     int64_t len;
     int64_t offset = 0;
     uint64_t delay_ns = 0;
@@ -119,7 +122,7 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
     int64_t n = 0; /* bytes */
     void *buf;
 
-    if (bs == s->bottom) {
+    if (unfiltered_bs == s->bottom_cow_node) {
         /* Nothing to stream */
         return 0;
     }
@@ -154,13 +157,14 @@ static int coroutine_fn stream_run(Job *job, Error **errp)
 
         copy = false;
 
-        ret = bdrv_is_allocated(bs, offset, STREAM_BUFFER_SIZE, &n);
+        ret = bdrv_is_allocated(unfiltered_bs, offset, STREAM_BUFFER_SIZE, &n);
         if (ret == 1) {
             /* Allocated in the top, no need to copy.  */
         } else if (ret >= 0) {
             /* Copy if allocated in the intermediate images.  Limit to the
              * known-unallocated area [offset, offset+n*BDRV_SECTOR_SIZE).  */
-            ret = bdrv_is_allocated_above(backing_bs(bs), s->bottom, true,
+            ret = bdrv_is_allocated_above(bdrv_filtered_cow_bs(unfiltered_bs),
+                                          s->bottom_cow_node, true,
                                           offset, n, &n);
             /* Finish early if end of backing file has been reached */
             if (ret == 0 && n == 0) {
@@ -231,9 +235,16 @@ void stream_start(const char *job_id, BlockDriverState *bs,
     BlockDriverState *iter;
     bool bs_read_only;
     int basic_flags = BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED;
-    BlockDriverState *bottom = bdrv_find_overlay(bs, base);
+    BlockDriverState *bottom_cow_node = bdrv_find_overlay(bs, base);
+    BlockDriverState *above_base;
 
-    if (bdrv_freeze_chain(bs, bottom, errp) < 0) {
+    /* Find the node directly above @base */
+    for (above_base = bottom_cow_node;
+         bdrv_filtered_bs(above_base) != base;
+         above_base = bdrv_filtered_bs(above_base))
+    {}
+
+    if (bdrv_freeze_chain(bs, above_base, errp) < 0) {
         return;
     }
 
@@ -261,16 +272,19 @@ void stream_start(const char *job_id, BlockDriverState *bs,
      * disappear from the chain after this operation. The streaming job reads
      * every block only once, assuming that it doesn't change, so forbid writes
      * and resizes. Reassign the base node pointer because the backing BS of the
-     * bottom node might change after the call to bdrv_reopen_set_read_only()
-     * due to parallel block jobs running.
+     * above_base node might change after the call to
+     * bdrv_reopen_set_read_only() due to parallel block jobs running.
      */
-    base = backing_bs(bottom);
-    for (iter = backing_bs(bs); iter && iter != base; iter = backing_bs(iter)) {
+    base = bdrv_filtered_bs(above_base);
+    for (iter = bdrv_filtered_bs(bs); iter && iter != base;
+         iter = bdrv_filtered_bs(iter))
+    {
         block_job_add_bdrv(&s->common, "intermediate node", iter, 0,
                            basic_flags, &error_abort);
     }
 
-    s->bottom = bottom;
+    s->bottom_cow_node = bottom_cow_node;
+    s->above_base = above_base;
     s->backing_file_str = g_strdup(backing_file_str);
     s->bs_read_only = bs_read_only;
     s->chain_frozen = true;
@@ -284,5 +298,5 @@ fail:
     if (bs_read_only) {
         bdrv_reopen_set_read_only(bs, true, NULL);
     }
-    bdrv_unfreeze_chain(bs, bottom);
+    bdrv_unfreeze_chain(bs, above_base);
 }
