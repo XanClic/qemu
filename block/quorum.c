@@ -67,6 +67,13 @@ typedef struct QuorumVotes {
 
 typedef struct QuorumChild {
     BdrvChild *child;
+
+    /*
+     * If set, check whether this node can be replaced without any
+     * other parent noticing: Unshare CONSISTENT_READ, and take the
+     * WRITE permission.
+     */
+    bool to_be_replaced;
 } QuorumChild;
 
 /* the following structure holds the state of one quorum instance */
@@ -1128,6 +1135,18 @@ static void quorum_child_perm(BlockDriverState *bs, BdrvChild *c,
                               uint64_t perm, uint64_t shared,
                               uint64_t *nperm, uint64_t *nshared)
 {
+    BDRVQuorumState *s = bs->opaque;
+    int child_i = -1;
+
+    if (c) {
+        for (child_i = 0; child_i < s->num_children; child_i++) {
+            if (s->children[child_i].child == c) {
+                break;
+            }
+        }
+        assert(child_i < s->num_children);
+    }
+
     *nperm = perm & DEFAULT_PERM_PASSTHROUGH;
 
     /*
@@ -1137,6 +1156,12 @@ static void quorum_child_perm(BlockDriverState *bs, BdrvChild *c,
     *nshared = (shared & (BLK_PERM_CONSISTENT_READ |
                           BLK_PERM_WRITE_UNCHANGED))
              | DEFAULT_PERM_UNCHANGED;
+
+    if (child_i >= 0 && s->children[child_i].to_be_replaced) {
+        /* Prepare for sudden data changes */
+        *nperm |= BLK_PERM_WRITE;
+        *nshared &= ~BLK_PERM_CONSISTENT_READ;
+    }
 }
 
 static const char *const quorum_strong_runtime_opts[] = {
