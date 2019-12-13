@@ -32,6 +32,10 @@
 #include <fuse_lowlevel.h>
 
 
+/* Prevent overly long bounce buffer allocations */
+#define FUSE_MAX_BOUNCE_BYTES (MIN(BDRV_REQUEST_MAX_BYTES, 64 * 1024 * 1024))
+
+
 typedef struct FuseExport {
     BlockExport common;
 
@@ -241,7 +245,229 @@ static bool is_regular_file(const char *path, Error **errp)
     return true;
 }
 
+
+/**
+ * Let clients look up files.  Always return ENOENT because we only
+ * care about the mountpoint itself.
+ */
+static void fuse_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+    fuse_reply_err(req, ENOENT);
+}
+
+/**
+ * Let clients get file attributes (i.e., stat() the file).
+ */
+static void fuse_getattr(fuse_req_t req, fuse_ino_t inode,
+                         struct fuse_file_info *fi)
+{
+    struct stat statbuf;
+    int64_t length, allocated_blocks;
+    time_t now = time(NULL);
+    ImageInfo *info = NULL;
+    FuseExport *exp = fuse_req_userdata(req);
+    mode_t mode;
+    Error *local_error = NULL;
+
+    length = blk_getlength(exp->common.blk);
+    if (length < 0) {
+        fuse_reply_err(req, -length);
+        return;
+    }
+
+    bdrv_query_image_info(blk_bs(exp->common.blk), &info, &local_error);
+    if (local_error) {
+        allocated_blocks = DIV_ROUND_UP(length, 512);
+    } else {
+        allocated_blocks = DIV_ROUND_UP(info->actual_size, 512);
+    }
+
+    qapi_free_ImageInfo(info);
+    error_free(local_error);
+    local_error = NULL;
+
+    mode = S_IFREG | S_IRUSR;
+    if (exp->writable) {
+        mode |= S_IWUSR;
+    }
+
+    statbuf = (struct stat) {
+        .st_ino     = inode,
+        .st_mode    = mode,
+        .st_nlink   = 1,
+        .st_uid     = getuid(),
+        .st_gid     = getgid(),
+        .st_size    = length,
+        .st_blksize = blk_bs(exp->common.blk)->bl.request_alignment,
+        .st_blocks  = allocated_blocks,
+        .st_atime   = now,
+        .st_mtime   = now,
+        .st_ctime   = now,
+    };
+
+    fuse_reply_attr(req, &statbuf, 1.);
+}
+
+static int fuse_do_truncate(const FuseExport *exp, int64_t size,
+                            PreallocMode prealloc)
+{
+    uint64_t blk_perm, blk_shared_perm;
+    int ret;
+
+    blk_get_perm(exp->common.blk, &blk_perm, &blk_shared_perm);
+
+    ret = blk_set_perm(exp->common.blk, blk_perm | BLK_PERM_RESIZE,
+                       blk_shared_perm, NULL);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = blk_truncate(exp->common.blk, size, true, prealloc, 0, NULL);
+
+    /* Must succeed, because we are only giving up the RESIZE permission */
+    blk_set_perm(exp->common.blk, blk_perm, blk_shared_perm, &error_abort);
+
+    return ret;
+}
+
+/**
+ * Let clients set file attributes.  Only resizing is supported.
+ */
+static void fuse_setattr(fuse_req_t req, fuse_ino_t inode, struct stat *statbuf,
+                         int to_set, struct fuse_file_info *fi)
+{
+    FuseExport *exp = fuse_req_userdata(req);
+    int ret;
+
+    if (!exp->writable) {
+        fuse_reply_err(req, EACCES);
+        return;
+    }
+
+    if (to_set & ~FUSE_SET_ATTR_SIZE) {
+        fuse_reply_err(req, ENOTSUP);
+        return;
+    }
+
+    ret = fuse_do_truncate(exp, statbuf->st_size, PREALLOC_MODE_OFF);
+    if (ret < 0) {
+        fuse_reply_err(req, -ret);
+        return;
+    }
+
+    fuse_getattr(req, inode, fi);
+}
+
+/**
+ * Let clients open a file (i.e., the exported image).
+ */
+static void fuse_open(fuse_req_t req, fuse_ino_t inode,
+                      struct fuse_file_info *fi)
+{
+    fuse_reply_open(req, fi);
+}
+
+/**
+ * Handle client reads from the exported image.
+ */
+static void fuse_read(fuse_req_t req, fuse_ino_t inode,
+                      size_t size, off_t offset, struct fuse_file_info *fi)
+{
+    FuseExport *exp = fuse_req_userdata(req);
+    int64_t length;
+    void *buf;
+    int ret;
+
+    /**
+     * Clients will expect short reads at EOF, so we have to limit
+     * offset+size to the image length.
+     */
+    length = blk_getlength(exp->common.blk);
+    if (length < 0) {
+        fuse_reply_err(req, -length);
+        return;
+    }
+
+    size = MIN(size, FUSE_MAX_BOUNCE_BYTES);
+    if (offset + size > length) {
+        size = length - offset;
+    }
+
+    buf = qemu_try_blockalign(blk_bs(exp->common.blk), size);
+    if (!buf) {
+        fuse_reply_err(req, ENOMEM);
+        return;
+    }
+
+    ret = blk_pread(exp->common.blk, offset, buf, size);
+    if (ret >= 0) {
+        fuse_reply_buf(req, buf, size);
+    } else {
+        fuse_reply_err(req, -ret);
+    }
+
+    qemu_vfree(buf);
+}
+
+/**
+ * Handle client writes to the exported image.
+ */
+static void fuse_write(fuse_req_t req, fuse_ino_t inode, const char *buf,
+                       size_t size, off_t offset, struct fuse_file_info *fi)
+{
+    FuseExport *exp = fuse_req_userdata(req);
+    int64_t length;
+    int ret;
+
+    if (!exp->writable) {
+        fuse_reply_err(req, EACCES);
+        return;
+    }
+
+    /**
+     * Clients will expect short writes at EOF, so we have to limit
+     * offset+size to the image length.
+     */
+    length = blk_getlength(exp->common.blk);
+    if (length < 0) {
+        fuse_reply_err(req, -length);
+        return;
+    }
+
+    size = MIN(size, BDRV_REQUEST_MAX_BYTES);
+    if (offset + size > length) {
+        size = length - offset;
+    }
+
+    ret = blk_pwrite(exp->common.blk, offset, buf, size, 0);
+    if (ret >= 0) {
+        fuse_reply_write(req, size);
+    } else {
+        fuse_reply_err(req, -ret);
+    }
+}
+
+/**
+ * Let clients flush the exported image.
+ */
+static void fuse_flush(fuse_req_t req, fuse_ino_t inode,
+                       struct fuse_file_info *fi)
+{
+    FuseExport *exp = fuse_req_userdata(req);
+    int ret;
+
+    ret = blk_flush(exp->common.blk);
+    fuse_reply_err(req, ret < 0 ? -ret : 0);
+}
+
 static const struct fuse_lowlevel_ops fuse_ops = {
+    .lookup     = fuse_lookup,
+    .getattr    = fuse_getattr,
+    .setattr    = fuse_setattr,
+    .open       = fuse_open,
+    .read       = fuse_read,
+    .write      = fuse_write,
+    .flush      = fuse_flush,
 };
 
 const BlockExportDriver blk_exp_fuse = {
