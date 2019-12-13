@@ -16,6 +16,7 @@
 #include "block/block.h"
 #include "sysemu/block-backend.h"
 #include "block/export.h"
+#include "block/fuse.h"
 #include "block/nbd.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-block-export.h"
@@ -24,6 +25,9 @@
 
 static const BlockExportDriver *blk_exp_drivers[] = {
     &blk_exp_nbd,
+#ifdef CONFIG_FUSE
+    &blk_exp_fuse,
+#endif
 };
 
 /* Only accessed from the main thread */
