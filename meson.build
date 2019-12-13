@@ -436,6 +436,11 @@ if 'CONFIG_TASN1' in config_host
 endif
 keyutils = dependency('libkeyutils', required: false,
                       method: 'pkg-config', static: enable_static)
+libfuse = not_found
+if 'CONFIG_FUSE' in config_host
+  libfuse = declare_dependency(compile_args: config_host['FUSE_CFLAGS'].split(),
+                               link_args: config_host['FUSE_LIBS'].split())
+endif
 
 has_gettid = cc.has_function('gettid')
 
@@ -1531,6 +1536,7 @@ endif
 summary_info += {'thread sanitizer':  config_host.has_key('CONFIG_TSAN')}
 summary_info += {'rng-none':          config_host.has_key('CONFIG_RNG_NONE')}
 summary_info += {'Linux keyring':     config_host.has_key('CONFIG_SECRET_KEYRING')}
+summary_info += {'fuse exports':      config_host.has_key('CONFIG_FUSE')}
 summary(summary_info, bool_yn: true)
 
 if not supported_cpus.contains(cpu)

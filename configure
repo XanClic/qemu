@@ -538,6 +538,7 @@ meson=""
 ninja=""
 skip_meson=no
 gettext=""
+fuse=""
 
 bogus_os="no"
 malloc_trim=""
@@ -1621,6 +1622,10 @@ for opt do
   ;;
   --disable-libdaxctl) libdaxctl=no
   ;;
+  --enable-fuse) fuse=yes
+  ;;
+  --disable-fuse) fuse=no
+  ;;
   *)
       echo "ERROR: unknown option $opt"
       echo "Try '$0 --help' for more information"
@@ -1945,6 +1950,7 @@ disabled with --disable-FEATURE, default is enabled if available:
   xkbcommon       xkbcommon support
   rng-none        dummy RNG, avoid using /dev/(u)random and getrandom()
   libdaxctl       libdaxctl support
+  fuse            fuse block device export
 
 NOTE: The object files are built at the place where configure is launched
 EOF
@@ -6207,6 +6213,28 @@ but not implemented on your system"
 fi
 
 ##########################################
+# FUSE support
+
+if test "$fuse" != "no"; then
+  cat > $TMPC <<EOF
+#define FUSE_USE_VERSION 31
+#include <fuse.h>
+#include <fuse_lowlevel.h>
+int main(void) { return 0; }
+EOF
+  fuse_cflags=$(pkg-config --cflags fuse3)
+  fuse_libs=$(pkg-config --libs fuse3)
+  if compile_prog "$fuse_cflags" "$fuse_libs"; then
+    fuse=yes
+  else
+    if test "$fuse" = "yes"; then
+      feature_not_found "fuse"
+    fi
+    fuse=no
+  fi
+fi
+
+##########################################
 # End of CC checks
 # After here, no more $cc or $ld runs
 
@@ -7391,6 +7419,12 @@ fi
 
 if test "$secret_keyring" = "yes" ; then
   echo "CONFIG_SECRET_KEYRING=y" >> $config_host_mak
+fi
+
+if test "$fuse" = "yes"; then
+  echo "CONFIG_FUSE=y" >> $config_host_mak
+  echo "FUSE_CFLAGS=$fuse_cflags" >> $config_host_mak
+  echo "FUSE_LIBS=$fuse_libs" >> $config_host_mak
 fi
 
 if test "$tcg_interpreter" = "yes"; then
