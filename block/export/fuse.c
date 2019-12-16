@@ -45,6 +45,7 @@ typedef struct FuseExport {
 
     char *mountpoint;
     bool writable;
+    bool growable;
 } FuseExport;
 
 static GHashTable *exports;
@@ -101,6 +102,7 @@ static int fuse_export_create(BlockExport *blk_exp,
 
     exp->mountpoint = g_strdup(args->mountpoint);
     exp->writable = blk_exp_args->writable;
+    exp->growable = args->growable;
 
     ret = setup_fuse_export(exp, args->mountpoint, errp);
     if (ret < 0) {
@@ -436,7 +438,15 @@ static void fuse_write(fuse_req_t req, fuse_ino_t inode, const char *buf,
 
     size = MIN(size, BDRV_REQUEST_MAX_BYTES);
     if (offset + size > length) {
-        size = length - offset;
+        if (exp->growable) {
+            ret = fuse_do_truncate(exp, offset + size, PREALLOC_MODE_OFF);
+            if (ret < 0) {
+                fuse_reply_err(req, -ret);
+                return;
+            }
+        } else {
+            size = length - offset;
+        }
     }
 
     ret = blk_pwrite(exp->common.blk, offset, buf, size, 0);
