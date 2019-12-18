@@ -1537,6 +1537,7 @@ summary_info += {'thread sanitizer':  config_host.has_key('CONFIG_TSAN')}
 summary_info += {'rng-none':          config_host.has_key('CONFIG_RNG_NONE')}
 summary_info += {'Linux keyring':     config_host.has_key('CONFIG_SECRET_KEYRING')}
 summary_info += {'fuse exports':      config_host.has_key('CONFIG_FUSE')}
+summary_info += {'fuse lseek':        config_host.has_key('CONFIG_FUSE_LSEEK')}
 summary(summary_info, bool_yn: true)
 
 if not supported_cpus.contains(cpu)

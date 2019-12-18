@@ -6226,11 +6226,39 @@ EOF
   fuse_libs=$(pkg-config --libs fuse3)
   if compile_prog "$fuse_cflags" "$fuse_libs"; then
     fuse=yes
+
+    cat > $TMPC <<EOF
+#define FUSE_USE_VERSION 31
+#include <fuse.h>
+#include <fuse_lowlevel.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/types.h>
+static void fuse_lseek(fuse_req_t req, fuse_ino_t inode, off_t offset,
+                       int whence, struct fuse_file_info *fi)
+{
+    if (whence == SEEK_DATA || whence == SEEK_HOLE) {
+        fuse_reply_lseek(req, offset);
+    } else {
+        fuse_reply_err(req, EINVAL);
+    }
+}
+const struct fuse_lowlevel_ops fuse_ops = {
+    .lseek = fuse_lseek,
+};
+int main(void) { return 0; }
+EOF
+    if compile_prog "$fuse_cflags" "$fuse_libs"; then
+      fuse_lseek=yes
+    else
+      fuse_lseek=no
+    fi
   else
     if test "$fuse" = "yes"; then
       feature_not_found "fuse"
     fi
     fuse=no
+    fuse_lseek=no
   fi
 fi
 
@@ -7425,6 +7453,10 @@ if test "$fuse" = "yes"; then
   echo "CONFIG_FUSE=y" >> $config_host_mak
   echo "FUSE_CFLAGS=$fuse_cflags" >> $config_host_mak
   echo "FUSE_LIBS=$fuse_libs" >> $config_host_mak
+
+  if test "$fuse_lseek" = "yes"; then
+    echo "CONFIG_FUSE_LSEEK=y" >> $config_host_mak
+  fi
 fi
 
 if test "$tcg_interpreter" = "yes"; then
