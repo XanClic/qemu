@@ -3137,7 +3137,7 @@ static BlockDriver vvfat_write_target = {
     .bdrv_close         = write_target_close,
 };
 
-static void vvfat_qcow_options(BdrvChildRole role,
+static void vvfat_qcow_options(BdrvChildRole role, bool parent_is_format,
                                int *child_flags, QDict *child_options,
                                int parent_flags, QDict *parent_options)
 {
