@@ -155,6 +155,11 @@ _filter_img_create()
         -e "s# force_size=\\(on\\|off\\)##g"
 }
 
+_filter_img_create_size()
+{
+    $SED -e "s# size=[0-9]\\+# size=SIZE#g"
+}
+
 _filter_img_info()
 {
     if [[ "$1" == "--format-specific" ]]; then
