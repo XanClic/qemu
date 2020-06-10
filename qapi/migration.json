@@ -508,6 +508,44 @@
             { 'name': 'zstd', 'if': 'defined(CONFIG_ZSTD)' } ] }
 
 ##
+# @BitmapMigrationBitmapAlias:
+#
+# @name: The name of the bitmap.
+#
+# @alias: An alias name for migration (for example the bitmap name on
+#         the opposite site).
+#
+# Since: 5.1
+##
+{ 'struct': 'BitmapMigrationBitmapAlias',
+  'data': {
+      'name': 'str',
+      'alias': 'str'
+  } }
+
+##
+# @BitmapMigrationNodeAlias:
+#
+# Maps a block node name and the bitmaps it has to aliases for dirty
+# bitmap migration.
+#
+# @node-name: A block node name.
+#
+# @alias: An alias block node name for migration (for example the
+#         node name on the opposite site).
+#
+# @bitmaps: Mappings for the bitmaps on this node.
+#
+# Since: 5.1
+##
+{ 'struct': 'BitmapMigrationNodeAlias',
+  'data': {
+      'node-name': 'str',
+      'alias': 'str',
+      'bitmaps': [ 'BitmapMigrationBitmapAlias' ]
+  } }
+
+##
 # @MigrationParameter:
 #
 # Migration parameters enumeration
@@ -641,6 +679,18 @@
 #          will consume more CPU.
 #          Defaults to 1. (Since 5.0)
 #
+# @block-bitmap-mapping: Maps block nodes and bitmaps on them to
+#          aliases for the purpose of dirty bitmap migration.  Such
+#          aliases may for example be the corresponding names on the
+#          opposite site.
+#          The mapping must be one-to-one and complete: On the source,
+#          migrating a bitmap from a node when either is not mapped
+#          will result in an error.  On the destination, similarly,
+#          receiving a bitmap (by alias) from a node (by alias) when
+#          either alias is not mapped will result in an error.
+#          By default, all node names and bitmap names are mapped to
+#          themselves. (Since 5.1)
+#
 # Since: 2.4
 ##
 { 'enum': 'MigrationParameter',
@@ -655,7 +705,8 @@
            'multifd-channels',
            'xbzrle-cache-size', 'max-postcopy-bandwidth',
            'max-cpu-throttle', 'multifd-compression',
-           'multifd-zlib-level' ,'multifd-zstd-level' ] }
+           'multifd-zlib-level' ,'multifd-zstd-level',
+           'block-bitmap-mapping' ] }
 
 ##
 # @MigrateSetParameters:
@@ -781,6 +832,18 @@
 #          will consume more CPU.
 #          Defaults to 1. (Since 5.0)
 #
+# @block-bitmap-mapping: Maps block nodes and bitmaps on them to
+#          aliases for the purpose of dirty bitmap migration.  Such
+#          aliases may for example be the corresponding names on the
+#          opposite site.
+#          The mapping must be one-to-one and complete: On the source,
+#          migrating a bitmap from a node when either is not mapped
+#          will result in an error.  On the destination, similarly,
+#          receiving a bitmap (by alias) from a node (by alias) when
+#          either alias is not mapped will result in an error.
+#          By default, all node names and bitmap names are mapped to
+#          themselves. (Since 5.1)
+#
 # Since: 2.4
 ##
 # TODO either fuse back into MigrationParameters, or make
@@ -811,7 +874,8 @@
             '*max-cpu-throttle': 'int',
             '*multifd-compression': 'MultiFDCompression',
             '*multifd-zlib-level': 'int',
-            '*multifd-zstd-level': 'int' } }
+            '*multifd-zstd-level': 'int',
+            '*block-bitmap-mapping': [ 'BitmapMigrationNodeAlias' ] } }
 
 ##
 # @migrate-set-parameters:
@@ -957,6 +1021,18 @@
 #          will consume more CPU.
 #          Defaults to 1. (Since 5.0)
 #
+# @block-bitmap-mapping: Maps block nodes and bitmaps on them to
+#          aliases for the purpose of dirty bitmap migration.  Such
+#          aliases may for example be the corresponding names on the
+#          opposite site.
+#          The mapping must be one-to-one and complete: On the source,
+#          migrating a bitmap from a node when either is not mapped
+#          will result in an error.  On the destination, similarly,
+#          receiving a bitmap (by alias) from a node (by alias) when
+#          either alias is not mapped will result in an error.
+#          By default, all node names and bitmap names are mapped to
+#          themselves. (Since 5.1)
+#
 # Since: 2.4
 ##
 { 'struct': 'MigrationParameters',
@@ -985,7 +1061,8 @@
             '*max-cpu-throttle': 'uint8',
             '*multifd-compression': 'MultiFDCompression',
             '*multifd-zlib-level': 'uint8',
-            '*multifd-zstd-level': 'uint8' } }
+            '*multifd-zstd-level': 'uint8',
+            '*block-bitmap-mapping': [ 'BitmapMigrationNodeAlias' ] } }
 
 ##
 # @query-migrate-parameters:
