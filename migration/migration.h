@@ -336,6 +336,9 @@ void migrate_send_rp_resume_ack(MigrationIncomingState *mis, uint32_t value);
 
 void dirty_bitmap_mig_before_vm_start(void);
 void init_dirty_bitmap_incoming_migration(void);
+bool check_dirty_bitmap_mig_alias_map(const BitmapMigrationNodeAliasList *bbm,
+                                      Error **errp);
+
 void migrate_add_address(SocketAddress *address);
 
 int foreach_not_ignored_block(RAMBlockIterFunc func, void *opaque);
