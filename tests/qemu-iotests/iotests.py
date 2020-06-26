@@ -28,6 +28,7 @@ import signal
 import struct
 import subprocess
 import sys
+import time
 from typing import (Any, Callable, Dict, Iterable,
                     List, Optional, Sequence, Tuple, TypeVar)
 import unittest
@@ -802,6 +803,10 @@ class VM(qtest.QEMUQtestMachine):
             assert node['name'] == expected_node, \
                    'Found node %s under %s (but expected %s)' % \
                    (node['name'], path, expected_node)
+
+    def wait_for_runstate(self, runstate: str) -> None:
+        while self.qmp('query-status')['return']['status'] != runstate:
+            time.sleep(0.2)
 
 index_re = re.compile(r'([^\[]+)\[([^\]]+)\]')
 
