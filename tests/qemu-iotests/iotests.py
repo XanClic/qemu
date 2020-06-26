@@ -799,6 +799,10 @@ class VM(qtest.QEMUQtestMachine):
                    'Found node %s under %s (but expected %s)' % \
                    (node['name'], path, expected_node)
 
+    def wait_for_runstate(self, runstate: str) -> None:
+        while self.qmp('query-status')['return']['status'] != runstate:
+            pass
+
 index_re = re.compile(r'([^\[]+)\[([^\]]+)\]')
 
 class QMPTestCase(unittest.TestCase):
