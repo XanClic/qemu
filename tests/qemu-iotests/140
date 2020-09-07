@@ -84,7 +84,13 @@ $QEMU_IO_PROG -f raw -r -c 'read -P 42 0 64k' \
 _send_qemu_cmd $QEMU_HANDLE \
     "{ 'execute': 'eject',
        'arguments': { 'device': 'drv' }}" \
-    'return'
+    '\(BLOCK_EXPORT_DELETED\|return\)' \
+    | sed '/BLOCK_EXPORT_DELETED/d'
+
+_send_qemu_cmd $QEMU_HANDLE \
+    '' \
+    '\(BLOCK_EXPORT_DELETED\|return\)' \
+    | sed '/BLOCK_EXPORT_DELETED/d'
 
 $QEMU_IO_PROG -f raw -r -c close \
     "nbd+unix:///drv?socket=$SOCK_DIR/nbd" 2>&1 \
