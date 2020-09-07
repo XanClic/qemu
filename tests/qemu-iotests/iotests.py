@@ -67,7 +67,8 @@ if os.environ.get('QEMU_IO_OPTIONS_NO_FMT'):
     qemu_io_args_no_fmt += \
         os.environ['QEMU_IO_OPTIONS_NO_FMT'].strip().split(' ')
 
-qemu_nbd_args = [os.environ.get('QEMU_NBD_PROG', 'qemu-nbd')]
+qemu_nbd_prog = [os.environ.get('QEMU_NBD_PROG', 'qemu-nbd')]
+qemu_nbd_args = qemu_nbd_prog
 if os.environ.get('QEMU_NBD_OPTIONS'):
     qemu_nbd_args += os.environ['QEMU_NBD_OPTIONS'].strip().split(' ')
 
@@ -282,6 +283,14 @@ def qemu_nbd_early_pipe(*args: str) -> Tuple[int, str]:
                                                    connect_stderr=False,
                                                    *full_args)
     return returncode, output if returncode else ''
+
+def qemu_nbd_list(*args: str) -> str:
+    '''Run qemu-nbd to list remote exports'''
+    full_args = qemu_nbd_prog + ['-L'] + list(args)
+    output, _ = qemu_tool_pipe_and_status('qemu-nbd', *full_args)
+    log(output, filters=[filter_testfiles])
+    return output
+
 
 @contextmanager
 def qemu_nbd_popen(*args):
