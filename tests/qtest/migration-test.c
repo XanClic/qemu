@@ -1810,6 +1810,10 @@ static void test_migrate_auto_converge(void)
      */
     const int64_t init_pct = 5, inc_pct = 25, max_pct = 95;
 
+#ifdef __i386__
+    return;
+#endif
+
     if (test_migrate_start(&from, &to, uri, &args)) {
         return;
     }
