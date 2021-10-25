@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# group: img
+# group: img huge_img
 #
 # qemu-img measure sub-command tests
 #
