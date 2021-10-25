@@ -40,6 +40,8 @@ cd ..
 _supported_fmt qcow2
 _supported_proto file
 _supported_os Linux
+# Using an external data file yields different offsets in the image map
+_unsupported_imgopts 'data_file'
 _require_command QEMU_NBD
 
 echo
