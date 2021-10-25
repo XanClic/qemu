@@ -68,7 +68,12 @@ stat -c"disk image file size in bytes: %s" "${TEST_IMG}"
 echo "Test 1: Maximum size (512 TB - 128 MB):"
 poke_file "$TEST_IMG" "$ds_offset" "\x00\x00\x00\xf8\xff\xff\x01\x00"
 poke_file "$TEST_IMG" "$bii_offset" "\x80\xff\xff\x1f"
-_img_info
+output=$(_img_info 2>&1)
+case $output in
+    *allocate*)
+        _notrun "Insufficent memory to run test" ;;
+    *) printf '%s\n' "$output" ;;
+esac
 
 echo
 echo "Test 2: Size too large (512 TB - 128 MB + 64 kB)"

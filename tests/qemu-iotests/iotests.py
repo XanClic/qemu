@@ -342,6 +342,8 @@ def img_info_log(filename: str, filter_path: Optional[str] = None,
     output = qemu_img(*args, check=check).stdout
     if not filter_path:
         filter_path = filename
+    if 'allocate' in output:
+        notrun('Insufficient memory')
     log(filter_img_info(output, filter_path, drop_child_info))
 
 def qemu_io_wrap_args(args: Sequence[str]) -> List[str]:
