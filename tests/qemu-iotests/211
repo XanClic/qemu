@@ -22,6 +22,7 @@
 #
 
 import iotests
+import subprocess
 from iotests import imgfmt
 
 iotests.script_initialize(
@@ -31,7 +32,7 @@ iotests.script_initialize(
 
 def blockdev_create(vm, options):
     error = vm.blockdev_create(options)
-    if error and 'Could not allocate bmap' in error:
+    if error and 'allocate' in error:
         iotests.notrun('Insufficient memory')
 
 with iotests.FilePath('t.vdi') as disk_path, \
@@ -148,7 +149,12 @@ with iotests.FilePath('t.vdi') as disk_path, \
                           'size': 562949819203584 })
     vm.shutdown()
 
-    iotests.img_info_log(disk_path)
+    try:
+        iotests.img_info_log(disk_path)
+    except subprocess.CalledProcessError as exc:
+        if 'Cannot allocate memory' in exc.output:
+            iotests.notrun('Insufficient memory')
+        raise
 
     #
     # Invalid sizes
