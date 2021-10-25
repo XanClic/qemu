@@ -3363,7 +3363,7 @@ static void usb_xhci_init(XHCIState *xhci)
                 USB_SPEED_MASK_LOW  |
                 USB_SPEED_MASK_FULL |
                 USB_SPEED_MASK_HIGH;
-            assert(i < XHCI_MAXPORTS);
+            assert(i + 1 <= XHCI_MAXPORTS);
             snprintf(port->name, sizeof(port->name), "usb2 port #%d", i+1);
             speedmask |= port->speedmask;
         }
@@ -3377,7 +3377,7 @@ static void usb_xhci_init(XHCIState *xhci)
             }
             port->uport = &xhci->uports[i];
             port->speedmask = USB_SPEED_MASK_SUPER;
-            assert(i < XHCI_MAXPORTS);
+            assert(i + 1 <= XHCI_MAXPORTS);
             snprintf(port->name, sizeof(port->name), "usb3 port #%d", i+1);
             speedmask |= port->speedmask;
         }
