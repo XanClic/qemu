@@ -74,7 +74,12 @@ $QEMU_IMG amend -o data_file="json:{'driver':'null-co',,'size':'4294967296'}" \
 # on L2 boundaries, we need large L2 tables; hence the cluster size of
 # 2 MB.  (Anything from 256 kB should work, though, because then one L2
 # table covers 8 GB.)
-$QEMU_IO -c "write 768 $((2 ** 31 - 512))" "$TEST_IMG" | _filter_qemu_io
+output=$($QEMU_IO -c "write 768 $((2 ** 31 - 512))" "$TEST_IMG" 2>&1 \
+             | _filter_qemu_io)
+if echo "$output" | grep -q 'Cannot allocate memory'; then
+    _notrun 'Insufficient memory, skipped test'
+fi
+echo "$output"
 
 _check_test_img
 
