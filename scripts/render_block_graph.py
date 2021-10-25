@@ -37,19 +37,22 @@ def perm(arr):
     return s
 
 
-def render_block_graph(qmp, filename, format='png'):
+def render_block_graph(qmp, filename, format='png', bds_nodes=None, job_nodes=None, block_graph=None):
     '''
     Render graph in text (dot) representation into "@filename" and
     representation in @format into "@filename.@format"
     '''
 
-    bds_nodes = qmp.command('query-named-block-nodes')
+    if bds_nodes is None:
+        bds_nodes = qmp.command('query-named-block-nodes')
     bds_nodes = {n['node-name']: n for n in bds_nodes}
 
-    job_nodes = qmp.command('query-block-jobs')
+    if job_nodes is None:
+        job_nodes = qmp.command('query-block-jobs')
     job_nodes = {n['device']: n for n in job_nodes}
 
-    block_graph = qmp.command('x-debug-query-block-graph')
+    if block_graph is None:
+        block_graph = qmp.command('x-debug-query-block-graph')
 
     graph = Digraph(comment='Block Nodes Graph')
     graph.format = format
@@ -108,15 +111,25 @@ class LibvirtGuest():
 
 
 if __name__ == '__main__':
-    obj = sys.argv[1]
-    out = sys.argv[2]
+    if len(sys.argv) == 3:
+        obj = sys.argv[1]
+        out = sys.argv[2]
+        qnbn = None
+        qbj = None
+        xdqbg = None
 
-    if os.path.exists(obj):
-        # assume unix socket
-        qmp = QEMUMonitorProtocol(obj)
-        qmp.connect()
+        if os.path.exists(obj):
+            # assume unix socket
+            qmp = QEMUMonitorProtocol(obj)
+            qmp.connect()
+        else:
+            # assume libvirt guest name
+            qmp = LibvirtGuest(obj)
     else:
-        # assume libvirt guest name
-        qmp = LibvirtGuest(obj)
+        qnbn = json.loads(sys.argv[1])
+        qbj = json.loads(sys.argv[2])
+        xdqbg = json.loads(sys.argv[3])
+        out = sys.argv[4]
+        qmp = None
 
-    render_block_graph(qmp, out)
+    render_block_graph(qmp, out, 'png', qnbn, qbj, xdqbg)
