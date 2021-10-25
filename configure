@@ -2615,7 +2615,7 @@ if test "$skip_meson" = no; then
   test "$tcg" != enabled && meson_option_add "-Dtcg=$tcg"
   test "$vfio_user_server" != auto && meson_option_add "-Dvfio_user_server=$vfio_user_server"
   run_meson() {
-    NINJA=$ninja $meson setup --prefix "$prefix" "$@" $cross_arg "$PWD" "$source_path"
+    NINJA=$ninja CFLAGS=$QEMU_CFLAGS LDFLAGS=$QEMU_LDFLAGS $meson setup --prefix "$prefix" "$@" $cross_arg "$PWD" "$source_path"
   }
   eval run_meson $meson_options
   if test "$?" -ne 0 ; then
