@@ -735,8 +735,11 @@ class AsyncProtocol(Generic[T]):
         def _paranoid_task_erase(task: Optional['asyncio.Future[_U]']
                                  ) -> Optional['asyncio.Future[_U]']:
             # Help to erase a task, ENSURING it is fully quiesced first.
-            assert (task is None) or task.done()
-            return None if (task and task.done()) else task
+            t0: Optional[asyncio.Future[Any]] = task
+            if t0 is not None:
+                t: asyncio.Future[Any] = t0
+                assert t.done()
+            return None
 
         assert self.runstate == Runstate.DISCONNECTING
         self._dc_task = _paranoid_task_erase(self._dc_task)
