@@ -59,8 +59,6 @@ def test_mypy(files: List[str]) -> None:
         return
 
     env = os.environ.copy()
-    env['MYPYPATH'] = env['PYTHONPATH']
-
     linters.run_linter('mypy', files, env=env, suppress_output=True)
 
 
