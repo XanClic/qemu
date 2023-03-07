@@ -419,6 +419,14 @@ int qemu_iovec_subvec_niov(QEMUIOVector *qiov, size_t offset, size_t len)
 /*
  * Compile new iovec, combining @head_buf buffer, sub-qiov of @mid_qiov,
  * and @tail_buf buffer into new qiov.
+ *
+ * By appending @head_buf and @tail_buf to @mid_qiov, this function may
+ * create I/O vectors up to two elements longer than IOV_MAX.  Callers
+ * are responsible for ensuring that the result vector is either shrunk
+ * back to IOV_MAX somehow (either by splitting it, or by merging
+ * neighboring elements into a single one), or that, by choosing the
+ * input parameters in the right way, the result can in fact never
+ * exceed IOV_MAX.
  */
 int qemu_iovec_init_extended(
         QEMUIOVector *qiov,
@@ -444,10 +452,6 @@ int qemu_iovec_init_extended(
     }
 
     total_niov = !!head_len + mid_niov + !!tail_len;
-    if (total_niov > IOV_MAX) {
-        return -EINVAL;
-    }
-
     if (total_niov == 1) {
         qemu_iovec_init_buf(qiov, NULL, 0);
         p = &qiov->local_iov;
@@ -518,7 +522,7 @@ void qemu_iovec_init_slice(QEMUIOVector *qiov, QEMUIOVector *source,
 
     /* We shrink the request, so we can't overflow neither size_t nor MAX_IOV */
     ret = qemu_iovec_init_extended(qiov, NULL, 0, source, offset, len, NULL, 0);
-    assert(ret == 0);
+    assert(ret == 0 && qiov->niov <= IOV_MAX);
 }
 
 void qemu_iovec_destroy(QEMUIOVector *qiov)
