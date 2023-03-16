@@ -42,6 +42,7 @@ cd ..
 _supported_fmt qcow2
 _supported_proto file
 _supported_os Linux
+_unsupported_imgopts compat=0.10 data_file
 
 size=1G
 
