@@ -41,6 +41,7 @@ _supported_fmt qcow2
 _supported_proto file
 _supported_os Linux
 _require_command QEMU_NBD
+_unsupported_imgopts data_file
 
 echo
 echo "=== Initial image setup ==="
