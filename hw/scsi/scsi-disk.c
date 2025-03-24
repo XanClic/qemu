@@ -46,6 +46,7 @@
 
 #ifdef __linux
 #include <scsi/sg.h>
+#include <linux/dm-ioctl.h>
 #endif
 
 #define SCSI_WRITE_SAME_MAX         (512 * KiB)
@@ -211,6 +212,65 @@ static void scsi_disk_emulate_load_request(QEMUFile *f, SCSIRequest *req)
     }
 }
 
+#define MPATH_MAX_RETRIES 3
+
+static int mpath_probe_all_paths(SCSIDiskState *s, SCSIRequest *req)
+{
+    BlockBackend *blk = s->qdev.conf.blk;
+    char ioctl_buf[sizeof(struct dm_ioctl) + sizeof(struct dm_target_msg) + sizeof("probe_all_paths")];
+    unsigned long ioctl_num;
+    struct dm_ioctl *ioctl_param;
+    struct dm_target_msg *ioctl_msg;
+    int ret;
+
+    /*
+     * Cannot really remember this: Backing block device can change.
+    if (s->multipath_device == 0) {
+        return 0;
+    }
+     */
+
+    if (req->mpath_retry_count >= MPATH_MAX_RETRIES) {
+        return 0;
+    }
+    req->mpath_retry_count++;
+
+    fprintf(stderr, "Probing all dm-mpath paths\n");
+
+    ioctl_param = (struct dm_ioctl *) ioctl_buf;
+    ioctl_msg = (struct dm_target_msg *) (ioctl_param + 1);
+
+    *ioctl_param = (struct dm_ioctl) {
+        .version = {DM_VERSION_MAJOR, DM_VERSION_MINOR, DM_VERSION_PATCHLEVEL},
+        .data_size = sizeof(ioctl_buf),
+        .data_start = sizeof(*ioctl_param),
+    };
+
+    *ioctl_msg = (struct dm_target_msg) { 0 };
+    strcpy(ioctl_msg->message, "probe_all_paths");
+
+    ioctl_num = _IOWR(DM_IOCTL, DM_GET_TARGET_VERSION_CMD + 1, struct dm_ioctl);
+    ret = blk_ioctl(blk, ioctl_num, ioctl_buf);
+
+    fprintf(stderr, " -> %i\n", ret);
+
+    /*
+    if (s->multipath < 0) {
+        if (ret == -ENOTTY) {
+            s->multipath_device = 0;
+            return 0;
+        } else {
+            s->multipath_device = 1;
+        }
+    }
+     */
+
+    if (ret < 0) {
+        return ret;
+    }
+    return 1;
+}
+
 /*
  * scsi_handle_rw_error has two return values.  False means that the error
  * must be ignored, true means that the error has been processed and the
@@ -280,6 +340,14 @@ static bool scsi_handle_rw_error(SCSIDiskReq *r, int ret, bool acct_failed)
             error = EINVAL;
             break;
         }
+    }
+
+    /* TODO: Check whether mpath */
+    if (mpath_probe_all_paths(s, &r->req) == 1) {
+        scsi_req_retry(&r->req);
+        aio_bh_schedule_oneshot(qemu_get_aio_context(),
+                                scsi_dma_restart_bh, r->req.dev);
+        return true;
     }
 
     /*

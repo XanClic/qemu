@@ -50,6 +50,8 @@ struct SCSIRequest {
     BlockAIOCB        *aiocb;
     QEMUSGList        *sg;
 
+    int               mpath_retry_count;
+
     /* Protected by SCSIDevice->requests_lock */
     QTAILQ_ENTRY(SCSIRequest) next;
 };
@@ -240,6 +242,8 @@ int scsi_SG_IO_FROM_DEV(BlockBackend *blk, uint8_t *cmd, uint8_t cmd_size,
                         uint8_t *buf, uint8_t buf_size, uint32_t timeout);
 SCSIDevice *scsi_device_find(SCSIBus *bus, int channel, int target, int lun);
 SCSIDevice *scsi_device_get(SCSIBus *bus, int channel, int target, int lun);
+
+void scsi_dma_restart_bh(void *opaque);
 
 /* scsi-generic.c. */
 extern const SCSIReqOps scsi_generic_req_ops;

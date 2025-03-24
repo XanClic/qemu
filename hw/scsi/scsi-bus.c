@@ -298,17 +298,22 @@ static void scsi_dma_restart_req(SCSIRequest *req, void *opaque)
     scsi_req_unref(req);
 }
 
-static void scsi_dma_restart_cb(void *opaque, bool running, RunState state)
+void scsi_dma_restart_bh(void *opaque)
 {
     SCSIDevice *s = opaque;
 
     assert(qemu_in_main_thread());
 
+    scsi_device_for_each_req_async(s, scsi_dma_restart_req, NULL);
+}
+
+static void scsi_dma_restart_cb(void *opaque, bool running, RunState state)
+{
     if (!running) {
         return;
     }
 
-    scsi_device_for_each_req_async(s, scsi_dma_restart_req, NULL);
+    scsi_dma_restart_bh(opaque);
 }
 
 static bool scsi_bus_is_address_free(SCSIBus *bus,
