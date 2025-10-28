@@ -48,6 +48,8 @@ cd ..
 
 _supported_fmt qcow2
 _supported_proto file
+# Need zero clusters
+_unsupported_imgopts 'compat=0.10'
 
 size="1M"
 
