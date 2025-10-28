@@ -46,12 +46,17 @@ _unsupported_imgopts 'compat=0.10'
 
 IMG_SIZE=64M
 
+awk_allow_filter='
+    BEGIN { RS = "Header extension:\n" }
+    NR > 1 && $0 ~ /magic[ \t]+(0x6803f857|0x537be77)/ { printf "Header extension:\n%s", $0 }
+'
+
 echo
 echo "=== Create an encrypted image ==="
 echo
 
 _make_test_img --object secret,id=sec0,data=123456 -o encrypt.format=luks,encrypt.key-secret=sec0 $IMG_SIZE
-$PYTHON ../qcow2.py "$TEST_IMG" dump-header-exts
+$PYTHON ../qcow2.py "$TEST_IMG" dump-header-exts | awk "$awk_allow_filter"
 _img_info
 $QEMU_IMG check \
     --object secret,id=sec0,data=123456 \
@@ -63,7 +68,7 @@ echo "=== Remove the header extension ==="
 echo
 
 $PYTHON ../qcow2.py "$TEST_IMG" del-header-ext 0x0537be77
-$PYTHON ../qcow2.py "$TEST_IMG" dump-header-exts
+$PYTHON ../qcow2.py "$TEST_IMG" dump-header-exts | awk "$awk_allow_filter"
 _img_info
 $QEMU_IMG check \
     --object secret,id=sec0,data=123456 \
