@@ -443,8 +443,10 @@ static inline int nbd_read(QIOChannel *ioc, void *buffer, size_t size,
     int ret = qio_channel_read_all(ioc, buffer, size, errp) < 0 ? -EIO : 0;
 
     if (ret < 0) {
-        if (desc) {
+        if (desc && errp && *errp) {
             error_prepend(errp, "Failed to read %s: ", desc);
+        } else if (desc) {
+            error_setg(errp, "Failed to read %s", desc);
         }
         return ret;
     }
